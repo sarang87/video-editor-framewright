@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import streamlit as st
 
 from app.models import AnalysisCriteria
-from app.pipeline import analyze_videos, list_videos
+from app.pipeline import analyze_videos
 
 
 def _apply_styles() -> None:
@@ -92,8 +93,21 @@ def _criteria_form(existing: AnalysisCriteria) -> AnalysisCriteria:
     return updated
 
 
-def _list_video_names(input_dir: str) -> List[str]:
-    return [video.name for video in list_videos(input_dir)]
+def _save_uploaded_file(uploaded_file) -> Path:
+    """Save uploaded file to temporary directory and return path."""
+    if "temp_videos" not in st.session_state:
+        st.session_state["temp_videos"] = {}
+    
+    # Use file ID as key to avoid duplicates
+    file_id = f"{uploaded_file.name}_{uploaded_file.size}"
+    if file_id not in st.session_state["temp_videos"]:
+        temp_dir = Path(tempfile.gettempdir()) / "video_editor_uploads"
+        temp_dir.mkdir(exist_ok=True)
+        temp_path = temp_dir / uploaded_file.name
+        temp_path.write_bytes(uploaded_file.getvalue())
+        st.session_state["temp_videos"][file_id] = str(temp_path)
+    
+    return Path(st.session_state["temp_videos"][file_id])
 
 
 def main() -> None:
@@ -111,11 +125,6 @@ def main() -> None:
 
     with st.container():
         st.markdown("<div class='card'>", unsafe_allow_html=True)
-        input_dir = st.text_input(
-            "Input Folder",
-            value=str(Path.cwd() / "videos"),
-            help="Local path containing video files.",
-        )
         output_dir = st.text_input(
             "Output Folder",
             value=str(Path.cwd() / "outputs"),
@@ -156,49 +165,82 @@ def main() -> None:
 
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.markdown("### Video Selection")
-    video_names = _list_video_names(input_dir)
-    if not video_names:
-        st.warning("No video files found in the input folder.")
-        selected = []
+    
+    uploaded_files = st.file_uploader(
+        "Choose video files",
+        type=["mp4", "mov", "mkv", "avi", "webm"],
+        accept_multiple_files=True,
+        help="Select one or more video files to analyze",
+    )
+    
+    # Store uploaded files in session state
+    if uploaded_files:
+        if "uploaded_video_paths" not in st.session_state:
+            st.session_state["uploaded_video_paths"] = {}
+        
+        video_paths = []
+        for uploaded_file in uploaded_files:
+            video_path = _save_uploaded_file(uploaded_file)
+            video_paths.append(video_path)
+            st.session_state["uploaded_video_paths"][uploaded_file.name] = str(video_path)
+        
+        st.markdown("#### Uploaded Videos")
+        selected_video = st.radio(
+            "Select a video to preview:",
+            options=[v.name for v in video_paths],
+            key="video_preview_selector",
+        )
+        
+        if selected_video:
+            selected_path = next(p for p in video_paths if p.name == selected_video)
+            st.video(str(selected_path))
+        
+        st.markdown("---")
+        selected_for_analysis = st.multiselect(
+            "Select videos to analyze:",
+            options=[v.name for v in video_paths],
+            default=[v.name for v in video_paths],
+        )
+        
+        run_analysis = st.button("Run Analysis on Selected Videos", type="primary", use_container_width=True)
+        
+        if run_analysis:
+            if not selected_for_analysis:
+                st.error("Please select at least one video to analyze.")
+            else:
+                selected_paths = [p for p in video_paths if p.name in selected_for_analysis]
+                with st.spinner("Running analysis..."):
+                    results = analyze_videos(
+                        video_files=selected_paths,
+                        output_dir=output_dir,
+                        criteria=criteria,
+                        api_key=api_key or None,
+                        provider=provider,
+                        model_name=model_name,
+                        ollama_base_url=ollama_base_url,
+                        dry_run=dry_run,
+                    )
+                
+                st.markdown("### Results")
+                for result in results:
+                    status_class = "status-ok" if result.success else "status-fail"
+                    st.markdown(
+                        f"- <span class='badge'>{result.video_name}</span> "
+                        f"<span class='{status_class}'>"
+                        f"{'Success' if result.success else 'Failed'}"
+                        f"</span><br/>Output: `{result.output_path}`",
+                        unsafe_allow_html=True,
+                    )
+                    if result.error:
+                        st.code(result.error)
+                    if result.success:
+                        with open(result.output_path, "r") as f:
+                            st.markdown("**Analysis Results:**")
+                            st.markdown(f.read())
     else:
-        selected = st.multiselect("Select videos to analyze", options=video_names, default=video_names)
-
-    col_all, col_selected = st.columns(2)
-    run_all = col_all.button("Run Analysis on All Videos")
-    run_selected = col_selected.button("Run Analysis on Selected Videos")
+        st.info("👆 Please upload video files to get started.")
+    
     st.markdown("</div>", unsafe_allow_html=True)
-
-    if run_all or run_selected:
-        chosen = video_names if run_all else selected
-        if not chosen:
-            st.error("No videos selected.")
-            return
-        with st.spinner("Running analysis..."):
-            results = analyze_videos(
-                input_dir=input_dir,
-                output_dir=output_dir,
-                criteria=criteria,
-                selected_videos=chosen if not run_all else None,
-                api_key=api_key or None,
-                provider=provider,
-                model_name=model_name,
-                ollama_base_url=ollama_base_url,
-                dry_run=dry_run,
-            )
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.markdown("### Results")
-        for result in results:
-            status_class = "status-ok" if result.success else "status-fail"
-            st.markdown(
-                f"- <span class='badge'>{result.video_name}</span> "
-                f"<span class='{status_class}'>"
-                f"{'Success' if result.success else 'Failed'}"
-                f"</span><br/>Output: `{result.output_path}`",
-                unsafe_allow_html=True,
-            )
-            if result.error:
-                st.code(result.error)
-        st.markdown("</div>", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":

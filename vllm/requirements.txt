@@ -1,0 +1,79 @@
+openai
+langchain
+jupyter
+notebook
+python-dotenv
+pandas
+numpy
+
+# --- Core ---
+numpy<2.0
+pandas
+pyyaml
+tqdm
+
+# --- CV + ML ---
+# torch  <-- Commented out to prevent conflict with vllm
+# torchvision <-- We force-reinstall Nightly in Dockerfile for RTX 5070 Ti support
+# Note: opencv-python is NOT listed here explicitly, but will be pulled 
+# by ultralytics/inference-gpu. We handle this in the Dockerfile.
+ultralytics
+roboflow
+# vllm <-- Removed because we build from source, and listing it here might trigger pip to download from PyPI which conflicts.
+# Instead, we list all its runtime dependencies below.
+
+# --- vLLM Runtime Dependencies (Source Build) ---
+cbor2
+gguf>=0.17.1
+pybase64
+xgrammar==0.1.29
+outlines_core==0.2.11
+lm-format-enforcer==0.11.3
+llguidance>=1.3.0
+compressed-tensors==0.13.0
+depyf==0.20.0
+mistral_common[image]>=1.8.8
+ijson
+setproctitle
+openai-harmony>=0.0.3
+anthropic>=0.71.0
+model-hosting-container-standards>=0.1.13
+mcp
+grpcio>=1.76.0
+grpcio-reflection>=1.76.0
+tiktoken>=0.6.0
+prometheus-fastapi-instrumentator>=7.0.0
+
+# --- LLM Optimization & Quantization ---
+bitsandbytes>=0.45.3    # Crucial for 4-bit loading on 16GB VRAM
+accelerate              # Required for model offloading
+autoawq                 # Best quantization format for vLLM inference
+peft                    # For fine-tuning (LoRA/QLoRA)
+# flash-attn            # Uncomment if you are comfortable building from source, on hold
+
+# --- Video Processing ---
+ffmpeg-python
+
+# --- Visualization ---
+matplotlib
+seaborn
+folium>=0.14.0
+
+# --- Parallelization ---
+ray
+
+# --- Gemini/VLM/HF ---
+google-generativeai
+google-cloud-aiplatform
+Pillow
+transformers>=4.50.0
+timm
+imageio
+scikit-image
+pydantic
+qwen_vl_utils
+
+# --- DevOps/Linting ---
+ruff
+black
+pytest

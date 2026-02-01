@@ -12,6 +12,8 @@ services:
   vllm:
     build:
       context: ./vllm
+    environment:
+      - VLLM_USE_V1=0
     deploy:
       resources:
         reservations:
@@ -21,6 +23,8 @@ services:
               capabilities: [ gpu ]
     volumes:
       - ./vllm:/opt/app
+      - ./hf_cache:/root/.cache/huggingface
+    ipc: host
     command: tail -f /dev/null
     stdin_open: true
     tty: true

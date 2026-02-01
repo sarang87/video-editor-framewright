@@ -32,3 +32,8 @@ videos/*
 .DS_Store
 Thumbs.db
 
+# HuggingFace cache
+hf_cache/
+vllm/offload_cache/
+#logs
+*.log

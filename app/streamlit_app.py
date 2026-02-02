@@ -7,8 +7,11 @@ from typing import List, Optional
 
 import streamlit as st
 
-from app.models import AnalysisCriteria
+from app.models import AnalysisCriteria, ClipMetadata
 from app.pipeline import analyze_videos
+from app.services.database import DuckDBManager
+from app.services.ingest import IngestionPipeline
+from app.services.analyzer import VideoAnalyzer
 
 
 def _apply_styles() -> None:
@@ -94,18 +97,23 @@ def _criteria_form(existing: AnalysisCriteria) -> AnalysisCriteria:
 
 
 def _save_uploaded_file(uploaded_file) -> Path:
-    """Save uploaded file to temporary directory and return path."""
+    """Save uploaded file to shared directory and return path."""
     if "temp_videos" not in st.session_state:
         st.session_state["temp_videos"] = {}
     
     # Use file ID as key to avoid duplicates
     file_id = f"{uploaded_file.name}_{uploaded_file.size}"
     if file_id not in st.session_state["temp_videos"]:
-        temp_dir = Path(tempfile.gettempdir()) / "video_editor_uploads"
-        temp_dir.mkdir(exist_ok=True)
-        temp_path = temp_dir / uploaded_file.name
-        temp_path.write_bytes(uploaded_file.getvalue())
-        st.session_state["temp_videos"][file_id] = str(temp_path)
+        # Use a directory inside /app so it's shared with vLLM container
+        # /app/uploads maps to /opt/project_root/uploads in vLLM
+        upload_dir = Path("uploads")
+        upload_dir.mkdir(exist_ok=True)
+        
+        target_path = upload_dir / uploaded_file.name
+        target_path.write_bytes(uploaded_file.getvalue())
+        
+        # Store absolute path
+        st.session_state["temp_videos"][file_id] = str(target_path.absolute())
     
     return Path(st.session_state["temp_videos"][file_id])
 
@@ -114,53 +122,82 @@ def main() -> None:
     st.set_page_config(page_title="Gemini Video Q&A POC", layout="wide")
     _apply_styles()
 
-    st.markdown("<div class='app-header'>Video Analysis Q&A POC</div>", unsafe_allow_html=True)
     st.markdown(
         "<div class='subtle'>Provide questions about your videos and get AI-generated answers.</div>",
         unsafe_allow_html=True,
     )
 
+    # Initialize Services
+    if "db_manager" not in st.session_state:
+        st.session_state["db_manager"] = DuckDBManager()
+    if "ingest_pipeline" not in st.session_state:
+        # Externally mounted path in Docker
+        watch_dir = "/videos_source"
+        proxy_dir = "videos/proxies"
+        st.session_state["ingest_pipeline"] = IngestionPipeline(watch_dir, proxy_dir)
+        st.session_state["ingest_pipeline"].start()
+    if "analyzer" not in st.session_state:
+        st.session_state["analyzer"] = VideoAnalyzer()
+
+    # Tabs for different functions
+    tab_qa, tab_brainstorm = st.tabs(["Q&A Analysis", "Cinematic Brainstorming"])
+
+    with tab_qa:
+        render_qa_tab()
+    
+    with tab_brainstorm:
+        render_brainstorm_tab()
+
+def render_qa_tab():
     if "criteria" not in st.session_state:
         st.session_state["criteria"] = AnalysisCriteria()
 
+    criteria = st.session_state["criteria"]
+
     with st.container():
         st.markdown("<div class='card'>", unsafe_allow_html=True)
-        output_dir = st.text_input(
-            "Output Folder",
-            value=str(Path.cwd() / "outputs"),
-            help="Local path for generated analysis files.",
-        )
-        provider = st.selectbox("Provider", ["gemini", "openai", "ollama"], index=0)
-        api_key_label = (
-            "Gemini API Key (or set GOOGLE_API_KEY env var)"
-            if provider == "gemini"
-            else "OpenAI API Key (or set OPENAI_API_KEY env var)"
-        )
-        if provider == "openai":
-            api_key_value = os.getenv("OPENAI_API_KEY", "")
-        elif provider == "ollama":
-            api_key_value = ""
+        st.markdown("### Configuration")
+        col1, col2 = st.columns(2)
+        with col1:
+            output_dir = st.text_input(
+                "Output Folder",
+                value=str(Path.cwd() / "outputs"),
+                key="output_dir_input",
+                help="Local path for generated analysis files.",
+            )
+            provider = st.selectbox("Provider", ["gemini", "vllm (local)", "openai", "ollama"], index=1)
+        
+        with col2:
+            if provider == "openai":
+                api_key_value = os.getenv("OPENAI_API_KEY", "")
+            elif provider == "ollama":
+                api_key_value = ""
+            else:
+                api_key_value = os.getenv("GOOGLE_API_KEY", "")
+            
+            api_key = st.text_input("API Key", value=api_key_value, type="password") if provider != "ollama" else ""
+            
+            model_options = (
+                ["gemini-1.5-pro", "gemini-1.5-flash"]
+                if provider == "gemini"
+                else ["Qwen/Qwen3-VL-8B-Instruct-FP8"]
+                if provider == "vllm (local)"
+                else ["gpt-4o-mini", "gpt-4o"]
+                if provider == "openai"
+                else ["qwen3-vl:latest"]
+            )
+            model_name = st.selectbox("Model", model_options, index=0)
+        
+        if provider == "ollama":
+            ollama_base_url = st.text_input("Ollama Base URL", value=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
         else:
-            api_key_value = os.getenv("GOOGLE_API_KEY", "")
-        api_key = st.text_input(api_key_label, value=api_key_value, type="password") if provider != "ollama" else ""
-        model_options = (
-            ["gemini-1.5-pro", "gemini-1.5-flash"]
-            if provider == "gemini"
-            else ["gpt-4o-mini", "gpt-4o"]
-            if provider == "openai"
-            else ["qwen3-vl:latest"]
-        )
-        model_name = st.selectbox("Model", model_options, index=0)
-        ollama_base_url = (
-            st.text_input("Ollama Base URL", value=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
-            if provider == "ollama"
-            else None
-        )
+            ollama_base_url = None
+            
         dry_run = st.checkbox("Dry Run (no API calls)", value=False)
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='card'>", unsafe_allow_html=True)
-    criteria = _criteria_form(st.session_state["criteria"])
+    criteria = _criteria_form(criteria)
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='card'>", unsafe_allow_html=True)
@@ -173,16 +210,11 @@ def main() -> None:
         help="Select one or more video files to analyze",
     )
     
-    # Store uploaded files in session state
     if uploaded_files:
-        if "uploaded_video_paths" not in st.session_state:
-            st.session_state["uploaded_video_paths"] = {}
-        
         video_paths = []
         for uploaded_file in uploaded_files:
             video_path = _save_uploaded_file(uploaded_file)
             video_paths.append(video_path)
-            st.session_state["uploaded_video_paths"][uploaded_file.name] = str(video_path)
         
         st.markdown("#### Uploaded Videos")
         selected_video = st.radio(
@@ -202,9 +234,7 @@ def main() -> None:
             default=[v.name for v in video_paths],
         )
         
-        run_analysis = st.button("Run Analysis on Selected Videos", type="primary", use_container_width=True)
-        
-        if run_analysis:
+        if st.button("Run Analysis on Selected Videos", type="primary", use_container_width=True):
             if not selected_for_analysis:
                 st.error("Please select at least one video to analyze.")
             else:
@@ -215,7 +245,7 @@ def main() -> None:
                         output_dir=output_dir,
                         criteria=criteria,
                         api_key=api_key or None,
-                        provider=provider,
+                        provider=provider.split(" ")[0],  # Get "vllm" from "vllm (local)"
                         model_name=model_name,
                         ollama_base_url=ollama_base_url,
                         dry_run=dry_run,
@@ -239,8 +269,62 @@ def main() -> None:
                             st.markdown(f.read())
     else:
         st.info("👆 Please upload video files to get started.")
-    
     st.markdown("</div>", unsafe_allow_html=True)
+
+def render_brainstorm_tab():
+    st.markdown("### Narrative Brainstorming Interface")
+    
+    db = st.session_state["db_manager"]
+    analyzer = st.session_state["analyzer"]
+
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.markdown("#### Registry & Search")
+        search_query = st.text_input("Find clips (e.g., 'sunset', 'fast motion')")
+        if search_query:
+            clips = db.search_context(search_query)
+        else:
+            clips = db.get_all_clips()
+        
+        st.dataframe(clips, use_container_width=True)
+        
+        if st.button("🔄 Sync Proxies & Analyze New"):
+            proxy_dir = Path("videos/proxies")
+            proxies = list(proxy_dir.glob("*_proxy.mp4"))
+            new_count = 0
+            with st.spinner(f"Analyzing {len(proxies)} proxies..."):
+                for proxy in proxies:
+                    # Check if already in DB
+                    exists = db.conn.execute("SELECT 1 FROM clips WHERE clip_name = ?", (proxy.name,)).fetchone()
+                    if not exists:
+                        metadata = analyzer.analyze_clip(str(proxy))
+                        if metadata:
+                            db.insert_clip(metadata)
+                            new_count += 1
+            st.success(f"Added {new_count} new clips to registry.")
+
+    with col2:
+        st.markdown("#### Narrative Goal")
+        user_request = st.text_area(
+            "What do you want to build?",
+            placeholder="e.g., I want to build a high-energy travel montage...",
+            height=100
+        )
+        
+        if st.button("Generate Edit Plan", type="primary"):
+            if not user_request:
+                st.error("Please enter a narrative goal.")
+            else:
+                with st.spinner("Brainstorming with available footage..."):
+                    # Use search context to pull relevant clips for the prompt
+                    # For now, we'll just use the search query if provided, or top 5
+                    relevant_clips = clips.head(10).to_json(orient="records")
+                    query_term = search_query if search_query else "general"
+                    plan = analyzer.brainstorm_narrative(query_term, relevant_clips, user_request)
+                    st.markdown("---")
+                    st.markdown("### 🎬 Shot List / Edit Plan")
+                    st.write(plan)
 
 
 if __name__ == "__main__":

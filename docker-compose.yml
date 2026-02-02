@@ -1,4 +1,3 @@
-version: "3.9"
 services:
   app:
     build: .
@@ -8,10 +7,13 @@ services:
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
     volumes:
       - ./:/app
+      - /mnt/d/Italy/Videos/CLIP:/videos_source:ro
 
   vllm:
     build:
       context: ./vllm
+    ports:
+      - "8000:8000"
     environment:
       - VLLM_USE_V1=0
     deploy:
@@ -22,9 +24,11 @@ services:
               count: all
               capabilities: [ gpu ]
     volumes:
+      - ./:/opt/project_root:ro
       - ./vllm:/opt/app
       - ./hf_cache:/root/.cache/huggingface
+      - ./videos/proxies:/opt/app/videos/proxies:ro
     ipc: host
-    command: tail -f /dev/null
+    command: python start_server.py
     stdin_open: true
     tty: true

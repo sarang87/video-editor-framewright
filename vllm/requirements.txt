@@ -4,8 +4,6 @@ jupyter
 notebook
 python-dotenv
 pandas
-numpy
-
 # --- Core ---
 numpy<2.0
 pandas

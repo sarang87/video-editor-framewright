@@ -39,3 +39,13 @@ vllm serve "Qwen/Qwen3-VL-8B-Instruct-FP8" \
 - **V0 Engine**: `VLLM_USE_V1=0` is required for stability on current builds.
 - **IPC Host**: Enabled in `docker-compose.yml` for shared memory access.
 
+## Troubleshooting
+
+### vLLM & Video Analysis
+If you encounter issues with video analysis (hallucinations, errors), please refer to [vLLM Integration Challenges](docs/vllm_integration_challenges.md).
+
+**Key Fixes:**
+*   **Video Loading**: We now use manual frame extraction in the Streamlit app to bypass vLLM's internal loader.
+*   **Debug Frames**: Check `outputs/debug_frames/` to see exactly what the model is analyzing.
+*   **Uploads**: Uploaded videos are saved to `./uploads` to ensure they are visible to the Docker container.
+

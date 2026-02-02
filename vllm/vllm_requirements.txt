@@ -25,4 +25,8 @@ bitsandbytes>=0.45.3    # Crucial for 4-bit loading on 16GB VRAM
 accelerate              # Required for model offloading
 autoawq                 # Best quantization format for vLLM inference
 peft                    # For fine-tuning (LoRA/QLoRA)
+numpy<2.0.0             # Required for Numba compatibility (vLLM V1 engine)
+# --- Video Decoding ---
+decord
+av
 # flash-attn            # Uncomment if you are comfortable building from source, on hold

@@ -28,3 +28,12 @@ class VideoAnalysisResult(BaseModel):
     success: bool
     error: Optional[str] = None
 
+
+class ClipMetadata(BaseModel):
+    clip_name: str
+    category: str = Field(description="A-roll or B-roll")
+    visual_description: str
+    shot_type: str
+    motion_detected: str
+    narrative_utility: str
+

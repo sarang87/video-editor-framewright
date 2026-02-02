@@ -40,6 +40,12 @@ def analyze_videos(
     output_path = ensure_output_dir(output_dir)
     if dry_run:
         client = None
+    elif provider == "vllm":
+        client = OpenAIClient(
+            api_key=api_key or "token-is-ignored",
+            model_name=model_name or "Qwen/Qwen3-VL-8B-Instruct-FP8",
+            base_url="http://vllm:8000/v1"  # Inside docker network
+        )
     elif provider == "openai":
         client = OpenAIClient(api_key=api_key, model_name=model_name or "gpt-4o-mini")
     elif provider == "ollama":

@@ -11,7 +11,7 @@ WORKDIR /opt/app
 # COPY requirements.txt .
 # RUN pip install --no-cache-dir -r requirements.txt
 COPY vllm_requirements.txt .
-RUN pip install --no-cache-dir -r vllm_requirements.txt
+RUN pip uninstall -y numpy && pip install --no-cache-dir "numpy<2.0.0" && pip install --no-cache-dir -r vllm_requirements.txt
 
 # Keep alive
 CMD ["tail", "-f", "/dev/null"]

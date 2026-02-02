@@ -1,51 +1,91 @@
-# Gemini Video Q&A POC
+# Framewright: AI Video Editor Assistant
 
-Streamlit app that analyzes videos with Gemini and outputs user-style questions.
+Framewright is a "Cinematic Brainstorming" tool that analyzes video clips using multimodal LLMs (Qwen2-VL via vLLM) to generate shot lists, edit plans, and detailed visual metadata.
 
-## Local Setup
-1. Create venv: `python -m venv .venv`
-2. Activate: `source .venv/bin/activate`
-3. Install deps: `pip install -r requirements.txt`
-4. Set API key: `export GOOGLE_API_KEY=...` or `export OPENAI_API_KEY=...`
-5. For Ollama: ensure `ollama serve` is running and `ffmpeg` is installed
-5. Run: `streamlit run app/streamlit_app.py`
+## 🚀 Quick Start (Docker)
 
-## Docker
-1. `docker compose up --build`
-2. Open `http://localhost:8501`
+This project is designed to run entirely within Docker containers, orchestrating a Streamlit frontend and a vLLM inference backend.
 
-## vLLM (RTX 5070 Ti / 16GB VRAM)
-The project includes a dedicated `vllm` service for high-performance inference.
+### Prerequisites
+1.  **OS**: Windows (WSL2) or Linux.
+2.  **GPU**: NVIDIA GPU with >= 12GB VRAM (Tested on RTX 5070 Ti 16GB).
+3.  **Docker**: Desktop installed with WSL2 backend.
+4.  **Drivers**: NVIDIA Container Toolkit must be installed (usually included with Docker Desktop on Windows).
 
-### 1. Start the service
+### 1. Environment Setup
+Create a `.env` file in the root directory (optional, or export variables):
 ```bash
-docker compose up -d vllm
+# Required for Q&A comparison (optional if only using local Brainstorming)
+# Required for Q&A comparison (optional if only using local Brainstorming)
+GOOGLE_API_KEY=your_key_here
+# Note: Full integration for external API-based models (Gemini, OpenAI) is pending.
+
 ```
 
-### 2. Run the model
-Run the following inside the container (via `docker compose exec vllm bash`) to start the server:
+### 2. Launch the Stack
+Run the application using Docker Compose. This starts both the `app` (frontend) and `vllm` (backend).
 ```bash
-export VLLM_USE_V1=0
-vllm serve "Qwen/Qwen3-VL-8B-Instruct-FP8" \
-  --trust-remote-code \
-  --max-model-len 4096 \
-  --gpu-memory-utilization 0.9 \
-  --enforce-eager
+docker compose up -d
+```
+*   **First Run**: This will take time to download the model (`Qwen/Qwen3-VL-8B-Instruct-FP8`) and build the containers.
+*   **Access**: Open your browser to `http://localhost:8501`.
+
+### 3. Usage
+*   **Upload**: Drop a video file into the UI.
+*   **Analyze**: Go to "Cinematic Brainstorming" to get automatic scene breakdown, camera motion analysis, and transition suggestions.
+*   **Q&A**: Ask specific questions about the footage.
+
+---
+
+## 🛠️ Architecture & Configuration
+
+*   **Frontend**: Streamlit app (`app/`)
+*   **Backend**: vLLM Server (`vllm/`) running `Qwen2-VL-7B-Instruct-FP8`.
+*   **Database**: DuckDB (`clips.duckdb`) stores analysis metadata.
+*   **Logs**: Centralized logging in `./logs/`.
+
+### System Diagrams
+![System Overview](docs/EditingAssitantOverview.png)
+![Data Flow](docs/EditingAssitantDataFlow.png)
+
+### Logging
+Logs from both services are combined into date-stamped files:
+```bash
+# View live logs
+tail -f logs/MM_DD_YYYY_debug.log
+```
+You can also inspect container logs specifically:
+```bash
+docker compose logs -f vllm
+docker compose logs -f app
 ```
 
-**Key Optimizations:**
-- **Persistent Cache**: Model weights are stored in `./hf_cache`.
-- **FP8 Quantization**: Mandatory for 16GB VRAM cards to avoid OOM.
-- **V0 Engine**: `VLLM_USE_V1=0` is required for stability on current builds.
-- **IPC Host**: Enabled in `docker-compose.yml` for shared memory access.
+### Configuration (vLLM)
+The vLLM server settings are defined in `vllm/start_server.py`.
+*   **Max Model Len**: `8192` (Tunable based on VRAM).
+*   **GPU Utilization**: `0.85` (Safety buffer for Windows desktop usage).
 
-## Troubleshooting
+---
 
-### vLLM & Video Analysis
-If you encounter issues with video analysis (hallucinations, errors), please refer to [vLLM Integration Challenges](docs/vllm_integration_challenges.md).
+## 🔧 Troubleshooting
 
-**Key Fixes:**
-*   **Video Loading**: We now use manual frame extraction in the Streamlit app to bypass vLLM's internal loader.
-*   **Debug Frames**: Check `outputs/debug_frames/` to see exactly what the model is analyzing.
-*   **Uploads**: Uploaded videos are saved to `./uploads` to ensure they are visible to the Docker container.
+### GPU Out of Memory (OOM)
+If the vLLM container exits with code 1 or "Engine core initialization failed":
+1.  **Check Background Usage**: Ensure no other AI apps or games are running.
+2.  **Adjust Settings**: Edit `vllm/start_server.py` and lower `--gpu-memory-utilization` (e.g., to `0.80`).
+3.  **Restart**:
+    ```bash
+    docker compose restart vllm
+    ```
 
+### Missing Dependencies / Code Updates
+If you change python dependencies:
+```bash
+docker compose up --build -d
+```
+
+### Resetting the Database
+If `clips.duckdb` becomes corrupted (e.g., "WAL file" error):
+1.  Stop the app: `docker compose down`
+2.  Delete the WAL file: `rm clips.duckdb.wal`
+3.  Restart: `docker compose up -d`

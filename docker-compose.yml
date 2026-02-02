@@ -5,6 +5,7 @@ services:
       - "8501:8501"
     environment:
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - VLLM_BASE_URL=http://vllm:8000/v1
     volumes:
       - ./:/app
       - /mnt/d/Italy/Videos/CLIP:/videos_source:ro
@@ -16,6 +17,7 @@ services:
       - "8000:8000"
     environment:
       - VLLM_USE_V1=0
+      - LOG_DIR=/opt/logs
     deploy:
       resources:
         reservations:
@@ -28,6 +30,7 @@ services:
       - ./vllm:/opt/app
       - ./hf_cache:/root/.cache/huggingface
       - ./videos/proxies:/opt/app/videos/proxies:ro
+      - ./logs:/opt/logs
     ipc: host
     command: python start_server.py
     stdin_open: true

@@ -37,3 +37,11 @@ hf_cache/
 vllm/offload_cache/
 #logs
 *.log
+
+# Debug frames & video
+debug_frames/
+debug_videos/
+*.mp4
+
+#duckdb
+*duckdb*

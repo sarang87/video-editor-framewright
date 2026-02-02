@@ -36,4 +36,5 @@ class ClipMetadata(BaseModel):
     shot_type: str
     motion_detected: str
     narrative_utility: str
+    transition_point: Optional[str] = Field(default=None, description="Suggested time/frame to cut")
 

@@ -8,4 +8,6 @@ mirascope[openai]==1.1.1
 duckdb
 ffmpeg-python
 watchdog
+decord
+numpy<2.0.0
 

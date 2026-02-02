@@ -4,10 +4,9 @@ import time
 from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-import logging
+from app.utils.logger import setup_logging
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = setup_logging(__name__)
 
 class VideoIngestHandler(FileSystemEventHandler):
     def __init__(self, proxy_dir: Path):

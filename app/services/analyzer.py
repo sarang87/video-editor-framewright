@@ -8,8 +8,8 @@ from app.models import ClipMetadata
 logger = logging.getLogger(__name__)
 
 class VideoAnalyzer:
-    def __init__(self, base_url: str = "http://localhost:8000/v1", api_key: str = "token-is-ignored"):
-        self.base_url = base_url
+    def __init__(self, base_url: Optional[str] = None, api_key: str = "token-is-ignored"):
+        self.base_url = base_url or os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1")
         self.api_key = api_key
 
     @openai.call(model="Qwen/Qwen3-VL-8B-Instruct-FP8", response_model=ClipMetadata)
@@ -30,18 +30,78 @@ class VideoAnalyzer:
         return {"video_path": video_path, "video_name": video_name}
 
     def analyze_clip(self, video_path: str) -> Optional[ClipMetadata]:
+        from app.utils.logger import setup_logging
+        from app.utils.video_utils import extract_frames_as_base64, build_image_payloads
+        from openai import OpenAI
+        import json
+
+        logger = setup_logging(__name__)
         video_name = os.path.basename(video_path)
-        # Map path from 'app' container (/app/...) to 'vllm' container (/opt/project_root/...)
-        vllm_video_path = video_path.replace("/app/", "/opt/project_root/")
+        
         try:
-            os.environ["OPENAI_BASE_URL"] = self.base_url
-            os.environ["OPENAI_API_KEY"] = self.api_key
+            logger.info(f"Analyzing clip: {video_name} using Frame Extraction")
             
-            result = self._analyze(video_path=vllm_video_path, video_name=video_name)
-            return result
+            # extract frames
+            base64_frames = extract_frames_as_base64(video_path, num_frames=16)
+            image_payloads = build_image_payloads(base64_frames)
+            
+            # Construct prompt
+            system_prompt = (
+                "You are an editing assistant (intern) reviewing raw footage post-production. "
+                "Your job is to produce detailed, actionable notes for the lead editor.\n\n"
+                "You are looking at a sequence of 16 chronologically ordered frames from a 30-second video clip.\n\n"
+                "Analyze the visual consistency between frames to identify Camera Motion (e.g., if the subject moves across the frames, it's likely a Pan).\n"
+                "Determine if the footage is A-Roll (interview/main action) or B-Roll (supplemental/texture).\n"
+                "Suggest a specific Transition Point based on when the action in the frames reaches its peak.\n\n"
+                "Output the response in strictly valid JSON format matching this schema:\n"
+                "{\n"
+                '  "clip_name": "string",\n'
+                '  "category": "string (A-roll or B-roll)",\n'
+                '  "visual_description": "string",\n'
+                '  "shot_type": "string",\n'
+                '  "motion_detected": "string",\n'
+                '  "narrative_utility": "string",\n'
+                '  "transition_point": "string (e.g., \'Frame 5\')"\n'
+                "}"
+            )
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user", 
+                    "content": [
+                        {"type": "text", "text": f"Analyze these frames for video: {video_name}"}
+                    ] + image_payloads
+                }
+            ]
+
+            client = OpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url
+            )
+            
+            logger.debug(f"Sending request to vLLM at {self.base_url}")
+            response = client.chat.completions.create(
+                model="Qwen/Qwen3-VL-8B-Instruct-FP8",
+                messages=messages,
+                max_tokens=1024
+            )
+            
+            content = response.choices[0].message.content
+            # Clean markdown code blocks if present
+            if content.startswith("```json"):
+                content = content.replace("```json", "").replace("```", "")
+            elif content.startswith("```"):
+                content = content.replace("```", "")
+            
+            data = json.loads(content)
+            # Ensure clip_name is set correctly if model hallucinates it
+            data["clip_name"] = video_name
+            
+            return ClipMetadata(**data)
+
         except Exception as e:
-            logger.error(f"Error analyzing clip {video_name}: {e}")
-            # Potential retry logic or fallback can go here
+            logger.error(f"Error analyzing clip {video_name}: {e}", exc_info=True)
             return None
 
     @openai.call(model="Qwen/Qwen3-VL-8B-Instruct-FP8")

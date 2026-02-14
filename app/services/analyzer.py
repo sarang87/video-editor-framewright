@@ -4,12 +4,13 @@ from typing import Optional, List
 import os
 import logging
 from app.models import ClipMetadata
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 class VideoAnalyzer:
     def __init__(self, base_url: Optional[str] = None, api_key: str = "token-is-ignored"):
-        self.base_url = base_url or os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1")
+        self.base_url = base_url or settings.VLLM_BASE_URL
         self.api_key = api_key
 
     @openai.call(model="Qwen/Qwen3-VL-8B-Instruct-FP8", response_model=ClipMetadata)

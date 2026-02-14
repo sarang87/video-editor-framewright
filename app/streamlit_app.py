@@ -5,13 +5,14 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional
 
-import streamlit as st
+import streamlit as st # Reload-Trigger
 
 from app.models import AnalysisCriteria, ClipMetadata
 from app.pipeline import analyze_videos
 from app.services.database import DuckDBManager
 from app.services.ingest import IngestionPipeline
 from app.services.analyzer import VideoAnalyzer
+from app.agent.service import AgentService
 
 
 def _apply_styles() -> None:
@@ -138,15 +139,57 @@ def main() -> None:
         st.session_state["ingest_pipeline"].start()
     if "analyzer" not in st.session_state:
         st.session_state["analyzer"] = VideoAnalyzer()
+    if "agent_service" not in st.session_state:
+        st.session_state["agent_service"] = AgentService()
 
     # Tabs for different functions
-    tab_qa, tab_brainstorm = st.tabs(["Q&A Analysis", "Cinematic Brainstorming"])
+    tab_qa, tab_brainstorm, tab_library = st.tabs(["Q&A Analysis", "Cinematic Brainstorming", "Clip Library"])
 
     with tab_qa:
         render_qa_tab()
     
     with tab_brainstorm:
         render_brainstorm_tab()
+
+    with tab_library:
+        render_library_tab()
+
+def render_library_tab():
+    st.markdown("### 📚 Clip Library")
+    st.markdown("<div class='subtle'>Browse all analyzed clips and their metadata.</div>", unsafe_allow_html=True)
+    
+    db_manager = st.session_state["db_manager"]
+    
+    try:
+        df = db_manager.get_all_clips()
+        if not df.empty:
+            st.dataframe(
+                df,
+                use_container_width=True,
+                column_config={
+                    "clip_name": "Clip Name",
+                    "category": "Category",
+                    "visual_description": "Visual Description",
+                    "shot_type": "Shot Type",
+                    "motion_detected": "Motion",
+                    "narrative_utility": "Narrative Utility",
+                    "transition_point": "Cut Point",
+                    "analyzed_at": st.column_config.DatetimeColumn("Analyzed At", format="D MMM YYYY, h:mm a"),
+                },
+                hide_index=True,
+            )
+            st.download_button(
+                "Download CSV",
+                df.to_csv(index=False).encode("utf-8"),
+                "clips_library.csv",
+                "text/csv",
+                key="download-csv"
+            )
+        else:
+            st.info("No clips found in the library. Upload and analyze videos to populate this list.")
+            
+    except Exception as e:
+        st.error(f"Error loading library: {e}")
 
 def render_qa_tab():
     if "criteria" not in st.session_state:
@@ -272,61 +315,77 @@ def render_qa_tab():
     st.markdown("</div>", unsafe_allow_html=True)
 
 def render_brainstorm_tab():
-    st.markdown("### Narrative Brainstorming Interface")
+    st.markdown("### Narrative Brainstorming Agent")
+    st.markdown("<div class='subtle'>Chat with the AI to find clips and build an edit plan.</div>", unsafe_allow_html=True)
     
-    db = st.session_state["db_manager"]
-    analyzer = st.session_state["analyzer"]
-
-    col1, col2 = st.columns([1, 2])
+    agent = st.session_state["agent_service"]
     
-    with col1:
-        st.markdown("#### Registry & Search")
-        search_query = st.text_input("Find clips (e.g., 'sunset', 'fast motion')")
-        if search_query:
-            clips = db.search_context(search_query)
-        else:
-            clips = db.get_all_clips()
-        
-        st.dataframe(clips, use_container_width=True)
-        
-        if st.button("🔄 Sync Proxies & Analyze New"):
-            proxy_dir = Path("videos/proxies")
-            proxies = list(proxy_dir.glob("*_proxy.mp4"))
-            new_count = 0
-            with st.spinner(f"Analyzing {len(proxies)} proxies..."):
-                for proxy in proxies:
-                    # Check if already in DB
-                    exists = db.conn.execute("SELECT 1 FROM clips WHERE clip_name = ?", (proxy.name,)).fetchone()
-                    if not exists:
-                        metadata = analyzer.analyze_clip(str(proxy))
-                        if metadata:
-                            db.insert_clip(metadata)
-                            new_count += 1
-            st.success(f"Added {new_count} new clips to registry.")
+    # Initialize chat history
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-    with col2:
-        st.markdown("#### Narrative Goal")
-        user_request = st.text_area(
-            "What do you want to build?",
-            placeholder="e.g., I want to build a high-energy travel montage...",
-            height=100
-        )
-        
-        if st.button("Generate Edit Plan", type="primary"):
-            if not user_request:
-                st.error("Please enter a narrative goal.")
-            else:
-                with st.spinner("Brainstorming with available footage..."):
-                    # Use search context to pull relevant clips for the prompt
-                    # For now, we'll just use the search query if provided, or top 5
-                    relevant_clips = clips.head(10).to_json(orient="records")
-                    query_term = search_query if search_query else "general"
-                    plan = analyzer.brainstorm_narrative(query_term, relevant_clips, user_request)
-                    st.markdown("---")
-                    st.markdown("### 🎬 Shot List / Edit Plan")
-                    st.write(plan)
+    # Display chat messages from history on app rerun
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # Accept user input
+    if prompt := st.chat_input("What do you want to create? (e.g. 'Find happy clips')"):
+        # Add user message to chat history
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        # Display assistant response in chat message container
+        with st.chat_message("assistant"):
+            message_placeholder = st.empty()
+            full_response = ""
+            
+            # Stream response from agent
+            # The agent returns events, we need to parse them.
+            # For MVP, we'll likely get a final response or intermediate steps.
+            # Let's assume the agent yields dicts with 'messages' or 'timeline'.
+            
+            try:
+                for event in agent.stream_chat(prompt):
+                    # Inspect event to see what node executed
+                    # This is highly dependent on LangGraph output format
+                    # Usually event is like {'agent': {'next': 'search'}, ...}
+                    
+                    # We are looking for the final response or state updates.
+                    # For now, let's look for 'messages' in the values.
+                    
+                    for node_name, node_state in event.items():
+                        if node_state is None:
+                            continue
+                        
+                        if "messages" in node_state:
+                            # It's a list of messages, get the last one if it's AI
+                            last_msg = node_state["messages"][-1]
+                            # If it's a tool output, maybe we show it?
+                            # If it's AI message, we show it.
+                            if hasattr(last_msg, "content") and last_msg.content:
+                                full_response = last_msg.content
+                                message_placeholder.markdown(full_response + "▌")
+                        
+                        if "timeline" in node_state and node_state["timeline"]:
+                            # If timeline is updated, show it specially
+                            timeline = node_state["timeline"]
+                            st.markdown("---")
+                            st.markdown("### 🎬 Proposed Edit Plan")
+                            st.json(timeline)
+                            st.markdown("---")
+
+                message_placeholder.markdown(full_response)
+                
+            except Exception as e:
+                st.error(f"Agent Error: {str(e)}")
+                full_response = f"I encountered an error: {str(e)}"
+                message_placeholder.markdown(full_response)
+                
+        # Add assistant response to chat history
+        st.session_state.messages.append({"role": "assistant", "content": full_response})
 
 
 if __name__ == "__main__":
     main()
-

@@ -16,6 +16,12 @@ graph TD
         vLLM -->|Returns JSON| Frontend
     end
 
+    subgraph "Agent Layer"
+        Frontend -->|Chat Stream| Agent[LangGraph Agent]
+        Agent -->|Plan| DSPy[DSPy Planner]
+        Agent -->|Query| DB
+    end
+
     FileSys -->|Raw Video| Frontend
 ```
 
@@ -55,6 +61,11 @@ graph TD
 *   **Framework**: Streamlit
 *   **Key Libs**: `streamlit`, `decord`, `duckdb`, `openai` (client)
 *   **Role**: Orchestration, UI, Preprocessing, DB Management.
+
+### Agent Layer (`app/agent/`)
+*   **Frameworks**: LangGraph, DSPy
+*   **Role**: Stateful conversation, Narrative Planning, SQL Generation.
+*   **See**: [Agent Architecture](agent_architecture.md)
 
 ### Backend (`vllm/`)
 *   **Engine**: vLLM (Versatile Large Language Model)

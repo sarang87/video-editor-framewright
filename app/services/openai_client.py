@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-import os
 from typing import Optional
 
 from openai import OpenAI
 
 from app.models import AnalysisCriteria
+from app.core.config import settings
 
 
 class OpenAIClient:
     def __init__(self, api_key: Optional[str] = None, model_name: str = "gpt-4o-mini", base_url: Optional[str] = None):
-        resolved_key = api_key or os.getenv("OPENAI_API_KEY")
+        resolved_key = api_key or settings.OPENAI_API_KEY
         # For vLLM, API key is often ignored but required by the library
         if not resolved_key and not base_url:
             raise ValueError("OPENAI_API_KEY is required to call OpenAI.")

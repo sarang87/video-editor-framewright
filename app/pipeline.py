@@ -8,6 +8,8 @@ from app.models import AnalysisCriteria, VideoAnalysisResult
 from app.services.gemini_client import GeminiClient
 from app.services.ollama_client import OllamaClient
 from app.services.openai_client import OpenAIClient
+from app.core.config import settings
+
 
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
@@ -42,16 +44,16 @@ def analyze_videos(
         client = None
     elif provider == "vllm":
         client = OpenAIClient(
-            api_key=api_key or "token-is-ignored",
-            model_name=model_name or "Qwen/Qwen3-VL-8B-Instruct-FP8",
-            base_url="http://vllm:8000/v1"  # Inside docker network
+            api_key=api_key or settings.OPENAI_API_KEY,
+            model_name=model_name or settings.MODEL_NAME,
+            base_url=settings.VLLM_BASE_URL
         )
     elif provider == "openai":
         client = OpenAIClient(api_key=api_key, model_name=model_name or "gpt-4o-mini")
     elif provider == "ollama":
         client = OllamaClient(
             model_name=model_name or "qwen3-vl:latest",
-            base_url=ollama_base_url,
+            base_url=ollama_base_url or settings.OLLAMA_BASE_URL,
         )
     else:
         client = GeminiClient(api_key=api_key, model_name=model_name or "gemini-1.5-pro")

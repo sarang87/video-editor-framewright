@@ -5,7 +5,12 @@ services:
       - "8501:8501"
     environment:
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      - VLLM_BASE_URL=http://vllm:8000/v1
+      - VLLM_BASE_URL=${VLLM_BASE_URL:-http://vllm:8000/v1}
+      - MODEL_NAME=${MODEL_NAME:-Qwen/Qwen3-VL-8B-Instruct-FP8}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      vllm:
+        condition: service_healthy
     volumes:
       - ./:/app
       - /mnt/d/Italy/Videos/CLIP:/videos_source:ro
@@ -18,6 +23,9 @@ services:
     environment:
       - VLLM_USE_V1=0
       - LOG_DIR=/opt/logs
+      - MODEL_NAME=${MODEL_NAME:-Qwen/Qwen3-VL-8B-Instruct-FP8}
+      - MAX_MODEL_LEN=${MAX_MODEL_LEN:-8192}
+      - GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.85}
     deploy:
       resources:
         reservations:
@@ -33,5 +41,11 @@ services:
       - ./logs:/opt/logs
     ipc: host
     command: python start_server.py
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     stdin_open: true
     tty: true

@@ -10,4 +10,3 @@ ffmpeg-python
 watchdog
 decord
 numpy<2.0.0
-

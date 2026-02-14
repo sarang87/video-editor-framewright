@@ -17,13 +17,16 @@ def start_vllm():
         logging.basicConfig(level=logging.INFO)
         logger = logging.getLogger("vllm_service")
 
+    model_name = os.getenv("MODEL_NAME", "Qwen/Qwen3-VL-8B-Instruct-FP8")
+    max_model_len = os.getenv("MAX_MODEL_LEN", "8192")
+    gpu_mem_util = os.getenv("GPU_MEMORY_UTILIZATION", "0.85")
+
     # Optimized command for RTX 5070 Ti (16GB VRAM)
-    # Using Qwen3-VL-8B-Instruct-FP8 for memory efficiency
     cmd = [
-        "vllm", "serve", "Qwen/Qwen3-VL-8B-Instruct-FP8",
+        "vllm", "serve", model_name,
         "--trust-remote-code",
-        "--max-model-len", "8192",
-        "--gpu-memory-utilization", "0.85",
+        "--max-model-len", max_model_len,
+        "--gpu-memory-utilization", gpu_mem_util,
         "--enforce-eager",
         "--limit-mm-per-prompt", '{"video": 1}',
         "--allowed-local-media-path", "/opt/project_root"

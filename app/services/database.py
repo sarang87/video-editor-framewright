@@ -1,4 +1,5 @@
 import duckdb
+import os
 from pathlib import Path
 from typing import List
 import pandas as pd
@@ -8,7 +9,9 @@ from app.utils.logger import setup_logging
 logger = setup_logging(__name__)
 
 class DuckDBManager:
-    def __init__(self, db_path: str = "clips.duckdb"):
+    def __init__(self, db_path: str = None):
+        if db_path is None:
+             db_path = os.getenv("DUCKDB_PATH", "clips.duckdb")
         self.db_path = db_path
         self.conn = None
         self.init_db()

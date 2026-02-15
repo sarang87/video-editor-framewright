@@ -327,6 +327,9 @@ def render_brainstorm_tab():
     # Display chat messages from history on app rerun
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
+            if message.get("reasoning"):
+                with st.status("Agent Thought Process", expanded=False):
+                    st.write(message["reasoning"])
             st.markdown(message["content"])
 
     # Accept user input
@@ -338,31 +341,30 @@ def render_brainstorm_tab():
 
         # Display assistant response in chat message container
         with st.chat_message("assistant"):
+            reasoning_placeholder = st.empty()
             message_placeholder = st.empty()
             full_response = ""
+            full_reasoning = None
             
             # Stream response from agent
-            # The agent returns events, we need to parse them.
-            # For MVP, we'll likely get a final response or intermediate steps.
-            # Let's assume the agent yields dicts with 'messages' or 'timeline'.
-            
             try:
                 for event in agent.stream_chat(prompt):
-                    # Inspect event to see what node executed
-                    # This is highly dependent on LangGraph output format
-                    # Usually event is like {'agent': {'next': 'search'}, ...}
-                    
-                    # We are looking for the final response or state updates.
-                    # For now, let's look for 'messages' in the values.
-                    
                     for node_name, node_state in event.items():
                         if node_state is None:
                             continue
                         
                         if "messages" in node_state:
-                            # It's a list of messages, get the last one if it's AI
                             last_msg = node_state["messages"][-1]
-                            # If it's a tool output, maybe we show it?
+                            
+                            # Check for reasoning in additional_kwargs
+                            if hasattr(last_msg, "additional_kwargs"):
+                                reasoning = last_msg.additional_kwargs.get("reasoning")
+                                if reasoning:
+                                    full_reasoning = reasoning
+                                    with reasoning_placeholder.container():
+                                        with st.status("Agent Thought Process", expanded=True):
+                                            st.write(full_reasoning)
+
                             # If it's AI message, we show it.
                             if hasattr(last_msg, "content") and last_msg.content:
                                 full_response = last_msg.content
@@ -384,7 +386,11 @@ def render_brainstorm_tab():
                 message_placeholder.markdown(full_response)
                 
         # Add assistant response to chat history
-        st.session_state.messages.append({"role": "assistant", "content": full_response})
+        st.session_state.messages.append({
+            "role": "assistant", 
+            "content": full_response,
+            "reasoning": full_reasoning
+        })
 
 
 if __name__ == "__main__":

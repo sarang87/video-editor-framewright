@@ -27,14 +27,21 @@ def agent_node(state: FilmState):
     messages = state["messages"]
     last_message = messages[-1]
     
-    # Very basic routing logic for now. 
-    # In a real agent, an LLM would decide this dynamically.
+    # Check if the last message is from the AI. If so, we are done with this turn.
+    if isinstance(last_message, AIMessage):
+        logger.info("Agent Decides: Done (Last message was AI).")
+        return {"next": "end"}
+
+    # If last message is from User, we must act.
     bin_val = state.get("bin")
-    # If bin is None, we haven't searched yet.
+    
+    # 1. Search if we haven't searched yet (bin is None)
+    #    (Future: Add heuristic to detect 'new search' intent here to clear bin)
     if bin_val is None:
         logger.info("Agent Decides: Search required (bin is None).")
         return {"next": "search"}
-    # If bin is empty list, we searched but found nothing.
+        
+    # 2. If bin is empty, we searched but found nothing.
     elif len(bin_val) == 0:
          logger.info("Agent Decides: Search yielded no results. Ending.")
          return {
@@ -42,12 +49,13 @@ def agent_node(state: FilmState):
              "messages": [AIMessage(content="I couldn't find any clips matching that description. Try broader keywords.")]
          }
     
-    if not state.get("timeline"):
-        logger.info("Agent Decides: Planning required.")
-        return {
-            "next": "planner",
-            "messages": [AIMessage(content=f"I found {len(bin_val)} potential clips. I'm creating an edit plan now...")]
-        }
+    # 3. If we have clips, we Plan/Refine.
+    #    We do this even if a timeline exists, effectively "Re-Planning" based on new user intent.
+    logger.info("Agent Decides: Planning/Refining required.")
+    return {
+        "next": "planner",
+        "messages": [AIMessage(content=f"I found {len(bin_val)} potential clips. I'm thinking...")]
+    }
 
     logger.info("Agent Decides: Done.")
     return {"next": "end"}
@@ -64,11 +72,30 @@ def search_node(state: FilmState):
     
     # Construct a query using LLM ideally, but for MVP let's use a broad keyword search
     # We'll use the 'sql_search' tool logic directly here or via tool node if complex
-    stop_words = {"find", "show", "me", "clips", "clip", "video", "videos", "footage", "of", "with", "searching", "looking", "for", "lets", "let's", "craft", "make", "create", "edit", "focussed", "focused"}
-    keywords = [w for w in intent.lower().split() if w not in stop_words and len(w) > 2]
+    stop_words = {
+        "find", "show", "me", "clips", "clip", "video", "videos", "footage", "of", "with", 
+        "searching", "looking", "for", "lets", "let's", "craft", "make", "create", "edit", 
+        "focussed", "focused", "feature", "featuring",
+        "chat", "about", "types", "structure", "narrative", "cutting"
+    }
     
-    if keywords:
-        search_term = keywords[0] 
+    # 1. Split and clean
+    raw_keywords = [w.strip(".,!?") for w in intent.lower().split()]
+    
+    # 2. Filter stop words and short words
+    valid_keywords = [w for w in raw_keywords if w not in stop_words and len(w) > 2]
+    
+    # 3. Handle single keyword fallback or multiple
+    if valid_keywords:
+        # Prioritize nouns/verbs over adjectives if possible, but for now just take the longest word 
+        # as it's likely more specific than short common words.
+        # sort by length desc
+        valid_keywords.sort(key=len, reverse=True)
+        search_term = valid_keywords[0]
+        
+        # Basic stemming for plurals
+        if search_term.endswith('s') and not search_term.endswith('ss'):
+             search_term = search_term[:-1]
     else:
         search_term = intent # Fallback
 
@@ -103,9 +130,11 @@ def planner_node(state: FilmState):
 
     try:
         # Call DSPy module
-        # Note: dspy.settings.configure needs to be called somewhere globally before this
-        # We assume it is configured in service.py
-        plan_text = planner.forward(user_intent=intent, search_results=bin_clips)
+        # Returns dict: {'edit_plan': str, 'reasoning': str}
+        result = planner.forward(user_intent=intent, search_results=bin_clips)
+        
+        plan_text = result.get("edit_plan", "")
+        reasoning = result.get("reasoning", "")
         
         logger.debug(f"Raw Plan Text (Length: {len(plan_text)}): {plan_text[:100]}...") # Log first 100 chars
         
@@ -116,7 +145,8 @@ def planner_node(state: FilmState):
         timeline = [{"description": plan_text}] 
         return {
             "timeline": timeline,
-            "messages": [AIMessage(content=plan_text)]
+            # Pass reasoning in additional_kwargs so Streamlit can render it
+            "messages": [AIMessage(content=plan_text, additional_kwargs={"reasoning": reasoning})]
         }
         
     except Exception as e:

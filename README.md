@@ -44,6 +44,19 @@ docker compose up -d
 *   **Database**: DuckDB (`clips.duckdb`) stores analysis metadata.
 *   **Logs**: Centralized logging in `./logs/`.
 
+## 🧠 Agentic System
+
+The application uses a **LangGraph** based agent to handle complex user queries. It follows a **Plan-and-Execute** workflow:
+
+1.  **Search**: Queries DuckDB to find relevant clips based on your intent.
+2.  **Plan**: Uses **DSPy** to reason about the clips and generate a narrative structure.
+3.  **Validate**: Ensures the selected clips exist.
+4.  **Respond**: Presents the edit plan to the user.
+
+![Agent Architecture](docs/AgentGraph.png)
+
+For a detailed explanation of the logic, see [Agent Logic](docs/agent_logic.md).
+
 ### System Diagrams
 ![System Overview](docs/EditingAssitantOverview.png)
 ![Data Flow](docs/EditingAssitantDataFlow.png)

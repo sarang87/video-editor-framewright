@@ -16,7 +16,7 @@ def main():
         print(f"Failed to initialize service: {e}")
         return
 
-    query = "Lets craft a mountain focussed fast cut edit"
+    query = "find mountain clips"
     print(f"Streaming chat for query: '{query}'")
     
     try:

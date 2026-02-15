@@ -43,7 +43,11 @@ class NarrativePlanner(dspy.Module):
         # Log Full Prediction Object for Debugging
         logger.debug(f"Full Prediction Object: {prediction}")
         # Validating that correct field is accessed
-        logger.debug(f"Reasoning: {getattr(prediction, 'reasoning', 'No reasoning found')}")
+        reasoning = getattr(prediction, 'reasoning', 'No reasoning found')
+        logger.debug(f"Reasoning: {reasoning}")
         logger.info(f"Generated Plan: {prediction.edit_plan}")
         
-        return prediction.edit_plan
+        return {
+            "edit_plan": prediction.edit_plan,
+            "reasoning": reasoning
+        }

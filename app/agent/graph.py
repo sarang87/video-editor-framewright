@@ -1,193 +1,180 @@
-from typing import List
-from langgraph.graph import StateGraph, START
+from typing import List, Literal, Annotated
+import json
+from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.prebuilt import ToolNode
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
+
 from app.agent.state import FilmState
 from app.agent.planner import NarrativePlanner
-from app.agent.tools import sql_search, validate_clips
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from app.agent.tools import list_tables_tool, get_schema_tool, db_query_tool, get_column_values_tool, validate_clips
+from app.core.config import settings
 from app.utils.logger import setup_logging
 
 logger = setup_logging("agent_graph")
 
-# Initialize Tools & Planner
+# --- Initialize Components ---
+
+# 1. Tools
+tools = [list_tables_tool, get_schema_tool, get_column_values_tool, db_query_tool]
+tool_node = ToolNode(tools)
+
+# 2. LLM (Agent)
+# Using vLLM as OpenAI Compatible Endpoint
+llm = ChatOpenAI(
+    model="Qwen/Qwen3-VL-8B-Instruct-FP8", # Or the model name served by vLLM
+    openai_api_base=settings.VLLM_BASE_URL,
+    openai_api_key="token-is-ignored",
+    temperature=0
+)
+
+# Bind tools to LLM
+llm_with_tools = llm.bind_tools(tools)
+
+# 3. Planner
 planner = NarrativePlanner()
 memory = MemorySaver()
+
+# --- System Prompt ---
+SYSTEM_PROMPT = """You are an expert Video Editor Agent with direct access to a SQL database of video clips.
+Your goal is to find the best video clips matching the user's request and then pass them to the Planner to create an edit.
+
+**Your Workflow:**
+1.  **Analyze Request**: Understand what the user wants (e.g., "b-roll of nature").
+2.  **Inspect Schema**: Use `list_tables_tool` and `get_schema_tool` to understand the database.
+    *   Table `clips` usually contains `visual_description`, `category`, `shot_type`, etc.
+3.  **Explore Data**: Use `get_column_values_tool` if you need to know valid categories (e.g., is it 'A-Roll' or 'a_roll'?).
+4.  **Query**: Write and execute a SQL query using `db_query_tool`.
+    *   Use `ILIKE` for case-insensitive matching.
+    *   Examples: `SELECT * FROM clips WHERE visual_description ILIKE '%sunset%'`
+5.  **Refine**: If the query fails or returns 0 results, correct your SQL and try again.
+6.  **Finish**: When you have found relevant clips, STOP calling tools. Just respond with a text summary like "I found X clips."
+
+**Important:**
+- Do not make up clip names.
+- Always verify your query results.
+"""
 
 # --- Nodes ---
 
 def agent_node(state: FilmState):
     """
-    Decides the next step based on the conversation history and current intent.
-    Simple logic:
-    - If user intent is new, Search.
-    - If search results exist, Plan.
-    - If plan exists, Validate.
-    - If validated, respond to user.
+    ReAct Agent: Decides to call a tool or end the search.
     """
     messages = state["messages"]
-    last_message = messages[-1]
     
-    # Check if the last message is from the AI. If so, we are done with this turn.
-    if isinstance(last_message, AIMessage):
-        logger.info("Agent Decides: Done (Last message was AI).")
-        return {"next": "end"}
+    # --- Logging Context Separation ---
+    # Only log at the start of a turn (when the last message is from the user)
+    if messages and isinstance(messages[-1], HumanMessage):
+        logger.info("\n" + "="*40 + "\n=== SYSTEM PROMPT ===\n" + SYSTEM_PROMPT)
+        logger.info("\n=== USER INPUT ===\n" + str(messages[-1].content))
 
-    # If last message is from User, we must act.
-    bin_val = state.get("bin")
+
+    # Prepend System Prompt if not present (or as a separate message manipulation)
+    input_messages = [SystemMessage(content=SYSTEM_PROMPT)] + messages
     
-    # 1. Search if we haven't searched yet (bin is None)
-    #    (Future: Add heuristic to detect 'new search' intent here to clear bin)
-    if bin_val is None:
-        logger.info("Agent Decides: Search required (bin is None).")
-        return {"next": "search"}
-        
-    # 2. If bin is empty, we searched but found nothing.
-    elif len(bin_val) == 0:
-         logger.info("Agent Decides: Search yielded no results. Ending.")
-         return {
-             "next": "end",
-             "messages": [AIMessage(content="I couldn't find any clips matching that description. Try broader keywords.")]
-         }
+    response = llm_with_tools.invoke(input_messages)
     
-    # 3. If we have clips, we Plan/Refine.
-    #    We do this even if a timeline exists, effectively "Re-Planning" based on new user intent.
-    logger.info("Agent Decides: Planning/Refining required.")
-    return {
-        "next": "planner",
-        "messages": [AIMessage(content=f"I found {len(bin_val)} potential clips. I'm thinking...")]
-    }
+    return {"messages": [response]}
 
-    logger.info("Agent Decides: Done.")
-    return {"next": "end"}
 
-def search_node(state: FilmState):
+def result_parser_node(state: FilmState):
     """
-    Execute SQL search based on user intent.
+    Extracts the clips from the last successful SQL query in the conversation history
+    and populates state["bin"].
     """
-    intent = state.get("user_intent", "")
-    if not intent:
-        logger.warning("Warning: No user_intent found in state.")
-        return {"bin": []}
-    logger.info(f"Executing Search for: {intent}")
+    messages = state["messages"]
+    bin_clips = []
     
-    # Construct a query using LLM ideally, but for MVP let's use a broad keyword search
-    # We'll use the 'sql_search' tool logic directly here or via tool node if complex
-    stop_words = {
-        "find", "show", "me", "clips", "clip", "video", "videos", "footage", "of", "with", 
-        "searching", "looking", "for", "lets", "let's", "craft", "make", "create", "edit", 
-        "focussed", "focused", "feature", "featuring",
-        "chat", "about", "types", "structure", "narrative", "cutting"
-    }
+    # Iterate backwards to find the last db_query_tool output
+    for msg in reversed(messages):
+        if isinstance(msg, ToolMessage) and msg.name == "db_query_tool":
+            try:
+                # The tool returns a JSON string
+                data = json.loads(msg.content)
+                if isinstance(data, list):
+                    bin_clips = data
+                    logger.info(f"Parsed {len(bin_clips)} clips from history.")
+                    break
+            except Exception as e:
+                logger.warning(f"Failed to parse db_query_tool output: {e}")
     
-    # 1. Split and clean
-    raw_keywords = [w.strip(".,!?") for w in intent.lower().split()]
-    
-    # 2. Filter stop words and short words
-    valid_keywords = [w for w in raw_keywords if w not in stop_words and len(w) > 2]
-    
-    # 3. Handle single keyword fallback or multiple
-    if valid_keywords:
-        # Prioritize nouns/verbs over adjectives if possible, but for now just take the longest word 
-        # as it's likely more specific than short common words.
-        # sort by length desc
-        valid_keywords.sort(key=len, reverse=True)
-        search_term = valid_keywords[0]
+    if not bin_clips:
+        logger.warning("No clips found in history to pass to planner.")
         
-        # Basic stemming for plurals
-        if search_term.endswith('s') and not search_term.endswith('ss'):
-             search_term = search_term[:-1]
-    else:
-        search_term = intent # Fallback
+    return {"bin": bin_clips}
 
-    query = f"SELECT * FROM clips WHERE visual_description ILIKE '%{search_term}%' OR category ILIKE '%{search_term}%'"
-    logger.info(f"Executing Search Query: {query}")
-    # StructuredTool must be called with invoke
-    try:
-        results = sql_search.invoke({"query": query})
-        logger.info(f"Search returned {len(results) if isinstance(results, list) else 'Error/Empty'} results.")
-    except Exception as e:
-        logger.error(f"Search Tool Error: {e}")
-        results = []
-    
-    if isinstance(results, str):
-        # Error or empty
-        logger.warning(f"Search Result (String): {results}")
-        return {"bin": []}
-        
-    return {"bin": results}
 
 def planner_node(state: FilmState):
     """
-    Generate Edit Plan using DSPy based on search results.
+    Generate Edit Plan using DSPy based on 'bin' results.
     """
-    intent = state["user_intent"]
-    bin_clips = state["bin"]
+    intent = state.get("user_intent", "")
+    bin_clips = state.get("bin", [])
     
-    logger.info(f"Generating Plan for {len(bin_clips)} candidate clips. User Intent: {intent}")
+    # --- Logging Context Separation ---
+    logger.info("\n" + "="*40 + "\n=== PLANNER INTENT ===\n" + str(intent))
+    logger.info("\n=== PLANNER CONTEXT (Search Results) ===\n" + json.dumps(bin_clips, indent=2))
+    
+    logger.info(f"Generating Plan for {len(bin_clips)} clips.")
+    
     if not bin_clips:
-        logger.warning("No clips to plan with.")
-        return {"timeline": []}
+        return {
+            "timeline": [],
+            "messages": [AIMessage(content="I couldn't find any clips matching your request.")]
+        }
 
     try:
         # Call DSPy module
-        # Returns dict: {'edit_plan': str, 'reasoning': str}
-        result = planner.forward(user_intent=intent, search_results=bin_clips)
+        result = planner(user_intent=intent, search_results=bin_clips)
         
         plan_text = result.get("edit_plan", "")
         reasoning = result.get("reasoning", "")
         
-        logger.debug(f"Raw Plan Text (Length: {len(plan_text)}): {plan_text[:100]}...") # Log first 100 chars
-        
-        # Parse text into structured timeline (simplistic parsing for MVP)
-        # Assuming the LLM returns a list or readable text we can display
-        # We store the raw text or structured dict if possible.
-        # For MVP, we'll store a mock structure based on the text.
         timeline = [{"description": plan_text}] 
         return {
             "timeline": timeline,
-            # Pass reasoning in additional_kwargs so Streamlit can render it
+            # Pass reasoning in additional_kwargs for Streamlit UI
             "messages": [AIMessage(content=plan_text, additional_kwargs={"reasoning": reasoning})]
         }
         
     except Exception as e:
         logger.error(f"Planning Error: {e}")
-        return {"timeline": []}
+        return {
+            "timeline": [],
+            "messages": [AIMessage(content=f"Error generating plan: {e}")]
+        }
 
-def validation_node(state: FilmState):
-    """
-    Validate if clips in timeline exist.
-    """
-    timeline = state.get("timeline", [])
-    if not timeline:
-        return {}
-        
-    # Extract clip names from timeline (if structured)
-    # Since our planner output is text for now, this step is tricky without parsing.
-    # We will skip deep validation in this pass or implement a regex extract if needed.
-    return {}
+# --- Router ---
+
+def router(state: FilmState) -> Literal["tools", "parser"]:
+    messages = state["messages"]
+    last_message = messages[-1]
+    
+    # If the LLM making a tool call?
+    if last_message.tool_calls:
+        return "tools"
+    
+    # If no tool call, it means the agent is done searching (or gave up).
+    # Move to parsing results -> planner
+    return "parser"
 
 # --- Graph Definition ---
 
 workflow = StateGraph(FilmState)
 
 workflow.add_node("agent", agent_node)
-workflow.add_node("search", search_node)
+workflow.add_node("tools", tool_node)
+workflow.add_node("parser", result_parser_node)
 workflow.add_node("planner", planner_node)
-workflow.add_node("validation", validation_node)
 
 workflow.add_edge(START, "agent")
 
-# Conditional edges based on agent decision
-def router(state):
-    # Route based on the agent's decision stored in 'next'
-    next_step = state.get("next")
-    if next_step == "end":
-        return "__end__"
-    return next_step
-
 workflow.add_conditional_edges("agent", router)
-workflow.add_edge("search", "agent") 
-workflow.add_edge("planner", "validation")
-workflow.add_edge("validation", "agent")
+workflow.add_edge("tools", "agent")
+workflow.add_edge("parser", "planner")
+workflow.add_edge("planner", END)
 
 app = workflow.compile(checkpointer=memory)

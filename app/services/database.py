@@ -89,3 +89,74 @@ class DuckDBManager:
         if self.conn:
             self.conn.close()
             self.conn = None
+
+    def get_schema_info(self) -> str:
+        """
+        Returns a string representation of the database schema (tables and columns).
+        Useful for the Agent to understand what it can query.
+        """
+        conn = self._get_connection()
+        try:
+            # Get all tables
+            tables_df = conn.execute("SHOW TABLES").df()
+            if tables_df.empty:
+                return "No tables found in database."
+            
+            schema_str = []
+            for _, row in tables_df.iterrows():
+                table_name = row['name']
+                # Get columns for each table
+                columns_df = conn.execute(f"DESCRIBE {table_name}").df()
+                
+                columns_str = []
+                for _, col_row in columns_df.iterrows():
+                    col_name = col_row['column_name']
+                    col_type = col_row['column_type']
+                    columns_str.append(f"- {col_name} ({col_type})")
+                
+                table_block = f"Table: {table_name}\n" + "\n".join(columns_str)
+                schema_str.append(table_block)
+                
+            return "\n\n".join(schema_str)
+        except Exception as e:
+            logger.error(f"Error getting schema: {e}")
+            return f"Error retrieving schema: {str(e)}"
+
+    def get_sample_values(self, table_name: str, column_name: str, limit: int = 10) -> List[str]:
+        """
+        Returns distinct sample values for a specific column.
+        Useful for categorical columns to understand what values are present.
+        """
+        conn = self._get_connection()
+        try:
+            query = f"SELECT DISTINCT {column_name} FROM {table_name} LIMIT {limit}"
+            result = conn.execute(query).fetchall()
+            return [str(row[0]) for row in result]
+        except Exception as e:
+            logger.error(f"Error getting sample values: {e}")
+            return []
+
+    def execute_safe_query(self, sql: str) -> pd.DataFrame:
+        """
+        Executes a SQL query safely (Read-Only).
+        Prevents modification of data by checking for DML keywords.
+        """
+        forbidden_keywords = ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "TRUNCATE", "CREATE"]
+        sql_upper = sql.upper().strip()
+        
+        # specific check: ensure it starts with SELECT or WITH (CTE)
+        if not (sql_upper.startswith("SELECT") or sql_upper.startswith("WITH") or sql_upper.startswith("SHOW") or sql_upper.startswith("DESCRIBE")):
+             raise ValueError("Only SELECT queries are allowed for safety.")
+
+        for keyword in forbidden_keywords:
+            if keyword in sql_upper:
+                # Basic check - might be too aggressive if 'drop' is in a string literal, but safe for now.
+                # A robust parser is better, but this is a V1 guardrail.
+                raise ValueError(f"Query contains forbidden keyword: {keyword}")
+
+        conn = self._get_connection()
+        try:
+            return conn.execute(sql).df()
+        except Exception as e:
+            logger.error(f"SQL Execution Error: {e}")
+            raise e

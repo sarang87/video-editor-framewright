@@ -29,7 +29,9 @@ def start_vllm():
         "--gpu-memory-utilization", gpu_mem_util,
         "--enforce-eager",
         "--limit-mm-per-prompt", '{"video": 1}',
-        "--allowed-local-media-path", "/opt/project_root"
+        "--allowed-local-media-path", "/opt/project_root",
+        "--enable-auto-tool-choice",
+        "--tool-call-parser", "llama3_json"
     ]
     
     logger.info(f"Starting vLLM server with command: {' '.join(cmd)}")

@@ -11,3 +11,6 @@ class FilmState(TypedDict):
     bin: List[dict]  # List of clips found via search (candidates)
     timeline: List[dict]  # Ordered list of clips selected for the edit (The Edit Plan)
     next: str # control flow field
+    sql_query: str # The last generated SQL query
+    sql_error: str # Any error from execution
+

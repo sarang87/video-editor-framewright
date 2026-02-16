@@ -10,26 +10,53 @@ from app.core.config import settings
 db_manager = DuckDBManager()
 
 @tool
-def sql_search(query: str):
+def list_tables_tool():
     """
-    Executes a DuckDB SQL query to find video clips.
-    The table name is 'clips'.
-    Columns: clip_name, category, visual_description, shot_type, motion_detected, narrative_utility, transition_point.
-    
-    Example queries:
-    - SELECT * FROM clips WHERE visual_description ILIKE '%smile%'
-    - SELECT clip_name, narrative_utility FROM clips WHERE category = 'B-roll'
+    Lista all tables in the database.
+    Returns: A list of table names.
     """
     try:
         conn = db_manager._get_connection()
-        # Safety check: simplistic read-only check
-        if "drop" in query.lower() or "delete" in query.lower() or "update" in query.lower() or "insert" in query.lower():
-             return "Error: Read-only queries allowed."
-             
-        df = conn.execute(query).df()
+        return [row[0] for row in conn.execute("SHOW TABLES").fetchall()]
+    except Exception as e:
+        return f"Error listing tables: {str(e)}"
+
+@tool
+def get_schema_tool(table_name: str):
+    """
+    Get the schema (columns and types) for a specific table.
+    Use this to understand what columns are available before querying.
+    """
+    try:
+        conn = db_manager._get_connection()
+        df = conn.execute(f"DESCRIBE {table_name}").df()
+        return df[['column_name', 'column_type']].to_string(index=False)
+    except Exception as e:
+        return f"Error getting schema for {table_name}: {str(e)}"
+
+@tool
+def get_column_values_tool(table_name: str, column_name: str):
+    """
+    Get the top 10 distinct values for a specific column.
+    Use this to understand what kind of data is in a categorical column (e.g., 'category', 'shot_type').
+    """
+    try:
+        return db_manager.get_sample_values(table_name, column_name)
+    except Exception as e:
+        return f"Error getting values for {column_name}: {str(e)}"
+
+@tool
+def db_query_tool(query: str):
+    """
+    Execute a read-only SQL query.
+    Always check the schema first to ensure correct column names.
+    Returns: JSON string of results.
+    """
+    try:
+        df = db_manager.execute_safe_query(query)
         if df.empty:
-            return "No clips found matching the query."
-        return df.to_dict(orient='records')
+            return "[]"
+        return df.to_json(orient='records')
     except Exception as e:
         return f"Error executing query: {str(e)}"
 

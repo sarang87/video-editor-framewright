@@ -13,6 +13,15 @@ This project is designed to run entirely within Docker containers, orchestrating
 4.  **Drivers**: NVIDIA Container Toolkit must be installed (usually included with Docker Desktop on Windows).
 
 ### 1. Environment Setup
+
+**Video Access**:
+The `docker-compose.yml` maps your host's `D:` drive to `/videos_source` in the container by default:
+```yaml
+volumes:
+  - /mnt/d:/videos_source:ro
+```
+If your videos are elsewhere, update this line in `docker-compose.yml`.
+
 Create a `.env` file in the root directory (optional, or export variables):
 ```bash
 # Required for Q&A comparison (optional if only using local Brainstorming)
@@ -31,9 +40,16 @@ docker compose up -d
 *   **Access**: Open your browser to `http://localhost:8501`.
 
 ### 3. Usage
-*   **Upload**: Drop a video file into the UI.
-*   **Analyze**: Go to "Cinematic Brainstorming" to get automatic scene breakdown, camera motion analysis, and transition suggestions.
-*   **Q&A**: Ask specific questions about the footage.
+*   **Dynamic Video Ingestion**:
+    *   Open the sidebar settings in the "Cinematic Brainstorming" tab.
+    *   Enter the path to your video folder (mapped via `/videos_source`).
+    *   **Monitor Progress**: View live stats for "Source Videos" vs "Proxies Ready".
+    *   **Stop Ingestion**: Use the "🛑 Stop Ingestion" button if needed.
+*   **Clip Library**:
+    *   Go to the "Clip Library" tab.
+    *   **Scan**: Click "Scan for New Clips" to find generated proxies.
+    *   **Analyze**: Click "Analyze & Index" to generate metadata for new clips using the AI.
+*   **Brainstorm**: Chat with the agent to generate edit plans based on your indexed clips.
 
 ---
 
@@ -96,6 +112,15 @@ If you change python dependencies:
 ```bash
 docker compose up --build -d
 ```
+
+### Network / Model Download Failure
+If the vLLM container fails to download the model from HuggingFace (`Network is unreachable`):
+1.  **DNS Fix**: The `docker-compose.yml` is configured to use Google DNS (`8.8.8.8`) for the `vllm` service.
+2.  **Restart**: `docker compose up -d --force-recreate vllm` to apply network changes.
+
+### Ingestion Not Showing
+*   **Proxy Generation**: This happens in the background. Check the "Ingestion Status" in the sidebar for live counts.
+*   **Library**: Proxies must be *scanned and analyzed* in the "Clip Library" tab before they appear in the database.
 
 ### Resetting the Database
 If `clips.duckdb` becomes corrupted (e.g., "WAL file" error):

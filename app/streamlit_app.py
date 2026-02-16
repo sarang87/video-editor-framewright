@@ -160,6 +160,68 @@ def render_library_tab():
     
     db_manager = st.session_state["db_manager"]
     
+    # --- Scan & Ingest Section ---
+    with st.expander("📥 Ingest New Proxies"):
+        st.markdown("Scan your watch folder for proxies that haven't been analyzed yet.")
+        
+        ingest_pipeline = st.session_state.get("ingest_pipeline")
+        if ingest_pipeline:
+            proxy_dir = ingest_pipeline.proxy_dir
+            
+            # Initialize state for scanned clips
+            if "scanned_proxies" not in st.session_state:
+                st.session_state["scanned_proxies"] = []
+
+            if st.button("Scan for New Clips"):
+                with st.spinner("Scanning..."):
+                    proxies = list(proxy_dir.glob("*_proxy.mp4"))
+                    new_clips = []
+                    for p in proxies:
+                        # Map proxy name back to original clip name if possible, or just use proxy name
+                        # Our ingest convention: original_stem + "_proxy.mp4"
+                        # But the DB stores 'clip_name' which usually matches the source video name 
+                        # For simplicity, we'll store the proxy filename as the key for now to avoid re-analysis
+                        if not db_manager.clip_exists(p.name):
+                            new_clips.append(p)
+                    st.session_state["scanned_proxies"] = new_clips
+            
+            # Show results and Analyze button if we have clips in state
+            new_clips = st.session_state["scanned_proxies"]
+            if new_clips:
+                st.success(f"Found {len(new_clips)} new proxies pending analysis.")
+                if st.button("Analyze & Index New Clips", type="primary"):
+                    progress_bar = st.progress(0)
+                    analyzer = st.session_state["analyzer"]
+                    
+                    for i, proxy_path in enumerate(new_clips):
+                        try:
+                            # Use analyzer to get metadata
+                            # Note: analyzer expects a path. It might use vLLM.
+                            # We use the proxy for analysis as it's smaller/faster? 
+                            # Actually, vLLM might prefer the original, but let's use proxy for speed if quality is ok.
+                            # The analyzer.analyze_clip takes a path.
+                            metadata = analyzer.analyze_clip(str(proxy_path))
+                            if metadata:
+                                # Use the proxy name as clip_name to ensure we can track it
+                                metadata.clip_name = proxy_path.name 
+                                db_manager.insert_clip(metadata)
+                        except Exception as e:
+                            st.error(f"Failed to analyze {proxy_path.name}: {e}")
+                        
+                        progress_bar.progress((i + 1) / len(new_clips))
+                    
+                    st.success("Ingestion complete! Refreshing...")
+                    st.session_state["scanned_proxies"] = [] # Clear state after ingest
+                    st.rerun()
+            elif st.session_state.get("scanned_proxies") == []:
+                 pass 
+
+        else:
+            st.warning("Ingestion pipeline not initialized.")
+    
+    st.divider()
+
+    
     try:
         df = db_manager.get_all_clips()
         if not df.empty:
@@ -320,6 +382,70 @@ def render_brainstorm_tab():
     
     agent = st.session_state["agent_service"]
     
+    # --- Sidebar Settings ---
+    with st.sidebar:
+        st.header("⚙️ Settings")
+        
+        # Ingestion Settings
+        st.subheader("Video Ingestion")
+        
+        # Default to the initial watch dir (only used if key not in state)
+        current_watch_dir = str(st.session_state["ingest_pipeline"].watch_dir)
+        
+        # Use key to persist user input across reruns
+        new_watch_dir = st.text_input(
+            "Watch Directory (Container Path)",
+            value=current_watch_dir,
+            key="watch_dir_input",
+            help="Path inside the container to watch for new videos. /videos_source maps to your D: drive."
+        )
+        
+        if st.button("Update Watch Folder"):
+            try:
+                st.session_state["ingest_pipeline"].update_watch_dir(new_watch_dir)
+                st.success(f"Now watching: {new_watch_dir}")
+            except Exception as e:
+                st.error(f"Failed to update: {e}")
+        
+        st.divider()
+        
+        # Live Stats
+        st.subheader("📊 Ingestion Status")
+        
+        col_ctrl1, col_ctrl2 = st.columns(2)
+        with col_ctrl1:
+            if st.button("Refresh Counts"):
+                st.rerun()
+        with col_ctrl2:
+            if st.button("🛑 Stop Ingestion", type="primary"):
+                st.session_state["ingest_pipeline"].stop()
+                st.warning("Ingestion stopped.")
+            
+        col1, col2 = st.columns(2)
+        
+        # Count source files
+        try:
+            source_path = st.session_state["ingest_pipeline"].watch_dir
+            # Recursive count using rglob for nested folders if needed, or just iterdir for flat
+            # The ingest logic is recursive=False currently in observer, but let's check what user expects.
+            # safe count:
+            source_count = sum(1 for p in source_path.glob("*") if p.suffix.lower() in {'.mp4', '.mov', '.mkv', '.avi', '.webm'})
+        except Exception:
+            source_count = 0
+            
+        # Count proxies
+        try:
+            proxy_path = st.session_state["ingest_pipeline"].proxy_dir
+            proxy_count = len(list(proxy_path.glob("*_proxy.mp4")))
+        except Exception:
+            proxy_count = 0
+            
+        col1.metric("Source Videos", source_count)
+        col2.metric("Proxies Ready", proxy_count)
+        
+        st.caption(f"Watching: `{current_watch_dir}`")
+        st.divider()
+
     # Initialize chat history
     if "messages" not in st.session_state:
         st.session_state.messages = []

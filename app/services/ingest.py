@@ -58,6 +58,7 @@ class IngestionPipeline:
         self.observer = Observer()
 
     def start(self):
+        self.running = True
         self.observer.schedule(self.handler, str(self.watch_dir), recursive=False)
         self.observer.start()
         logger.info(f"Watching directory: {self.watch_dir}")
@@ -68,14 +69,55 @@ class IngestionPipeline:
 
     def _process_existing(self):
         logger.info("Processing existing videos...")
-        for video in self.watch_dir.iterdir():
+        # Sort files to process in a deterministic order (e.g. alphabetical)
+        # This helps if we restart, we can skip existing ones properly (since handler checks existence)
+        files = sorted(self.watch_dir.iterdir())
+        
+        for video in files:
+            if not self.running:
+                logger.info("Processing loop stopped by user.")
+                break
+                
             if not video.name.startswith('.') and video.suffix.lower() in ('.mp4', '.mov', '.mkv', '.avi', '.webm'):
                 self.handler.generate_proxy(video)
 
     def stop(self):
+        self.running = False
         self.observer.stop()
         self.observer.join()
         logger.info("Ingestion pipeline stopped.")
+
+    def update_watch_dir(self, new_dir: str):
+        """Update the directory being watched at runtime."""
+        new_path = Path(new_dir).resolve()
+        
+        if not new_path.exists():
+            raise FileNotFoundError(f"Directory not found: {new_path}")
+            
+        if new_path == self.watch_dir:
+            return  # No change
+
+        logger.info(f"Switching watch directory from {self.watch_dir} to {new_path}")
+        
+        # Stop current observer
+        self.observer.unschedule_all()
+        self.observer.stop()
+        self.observer.join()
+        
+        # Update path
+        self.watch_dir = new_path
+        
+        # Restart observer
+        self.observer = Observer()
+        self.observer.schedule(self.handler, str(self.watch_dir), recursive=False)
+        self.observer.start()
+        
+        # Trigger processing of existing files in the new directory
+        import threading
+        # Ensure running is true before restarting loop
+        self.running = True 
+        threading.Thread(target=self._process_existing, daemon=True).start()
+
 
 if __name__ == "__main__":
     # For standalone testing

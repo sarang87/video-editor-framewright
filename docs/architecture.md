@@ -10,6 +10,11 @@ graph TD
     Frontend -->|Reads| FileSys[Shared Filesystem]
     Frontend -->|Stores Meta| DB[(DuckDB)]
     
+    subgraph "Ingestion Service"
+        FileSys -->|Watch| Ingest[Ingestion Pipeline]
+        Ingest -->|Generate| Proxy[Proxy Files]
+    end
+    
     subgraph "Inference Backend"
         Frontend -->|HTTP Request (Images)| vLLM[vLLM Container]
         vLLM -->|Loads Model| GPU[NVIDIA GPU]
@@ -27,20 +32,21 @@ graph TD
 
 ## Data Flow: "Cinematic Brainstorming"
 
-1.  **Ingestion**:
-    *   User uploads `video.mp4` via Streamlit.
-    *   App saves file to `./uploads` (Shared Volume).
+## Data Flow: "Cinematic Brainstorming"
 
-2.  **Preprocessing (Client-Side)**:
-    *   `app/services/analyzer.py` uses `decord` to open the video.
-    *   Extracts **16 frames** uniformly sampled from the clip.
-    *   Resizes images to 768px (max dimension) to optimize token usage.
-    *   Encodes frames as Base64 strings.
+1.  **Ingestion (Background)**:
+    *   **Observer**: `app/services/ingest.py` watches the configured directory (e.g., `/videos_source`).
+    *   **Proxy Gen**: `ffmpeg` converts raw videos to 640x480 proxies (`videos/proxies/*_proxy.mp4`).
+    *   This runs continuously and can be stopped/restarted via UI.
 
-3.  **Inference**:
-    *   App constructs a prompt: *"You are an editing assistant..."*.
-    *   App sends HTTP POST to `http://vllm:8000/v1/chat/completions`.
+2.  **Analysis (Foreground)**:
+    *   User clicks "Scan for New Clips" in the Library.
+    *   App identifies proxies not yet in `clips.duckdb`.
+    *   **Preprocessing**: `app/services/analyzer.py` extracts 16 frames from the *proxy*.
+    *   **Encoding**: Frames are resized (768px) and Base64 encoded.
+    *   **Inference**: App sends HTTP POST to `http://vllm:8000/v1/chat/completions`.
     *   Payload includes: System Prompt + User Message (Text + 16 Image URLs).
+    *   Model (`Qwen2-VL-7B-Instruct-FP8`) processes the multimodal input.
     *   Model (`Qwen2-VL-7B-Instruct-FP8`) processes the multimodal input.
 
 4.  **Structured Output**:

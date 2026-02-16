@@ -67,6 +67,13 @@ class DuckDBManager:
         ))
         logger.info(f"Inserted metadata for clip: {metadata.clip_name}")
 
+    def clip_exists(self, clip_name: str) -> bool:
+        """Check if a clip already exists in the database."""
+        conn = self._get_connection()
+        result = conn.execute("SELECT count(*) FROM clips WHERE clip_name = ?", (clip_name,)).fetchone()
+        return result[0] > 0
+
+
     def search_context(self, query: str) -> pd.DataFrame:
         """Simple keyword search over visual descriptions."""
         conn = self._get_connection()

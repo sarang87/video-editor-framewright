@@ -9,7 +9,7 @@ from langchain_core.runnables import RunnableConfig
 
 from app.agent.state import FilmState
 from app.agent.planner import NarrativePlanner
-from app.agent.tools import list_tables_tool, get_schema_tool, db_query_tool, get_column_values_tool, validate_clips
+from app.agent.tools import list_tables_tool, get_schema_tool, db_query_tool, get_column_values_tool, validate_clips, trigger_video_search_tool
 from app.core.config import settings
 from app.utils.logger import setup_logging
 
@@ -20,6 +20,7 @@ logger = setup_logging("agent_graph")
 # 1. Tools
 tools = [list_tables_tool, get_schema_tool, get_column_values_tool, db_query_tool]
 tool_node = ToolNode(tools)
+supervisor_tool_node = ToolNode(tools + [trigger_video_search_tool])
 
 # 2. LLM (Agent)
 # Using vLLM as OpenAI Compatible Endpoint
@@ -31,7 +32,8 @@ llm = ChatOpenAI(
 )
 
 # Bind tools to LLM
-llm_with_tools = llm.bind_tools(tools)
+llm_editor = llm.bind_tools(tools)
+llm_supervisor = llm.bind_tools(tools + [trigger_video_search_tool])
 
 # 3. Planner
 planner = NarrativePlanner()
@@ -44,7 +46,7 @@ Your goal is to find the best video clips matching the user's request and then p
 **Your Workflow:**
 1.  **Analyze Request**: Understand what the user wants (e.g., "b-roll of nature").
 2.  **Inspect Schema**: Use `list_tables_tool` and `get_schema_tool` to understand the database.
-    *   Table `clips` usually contains `visual_description`, `category`, `shot_type`, etc.
+    *   Table `clips` usually contains `visual_description`, `category`, `shot_type`, `duration` (FLOAT), etc.
 3.  **Explore Data**: Use `get_column_values_tool` if you need to know valid categories (e.g., is it 'A-Roll' or 'a_roll'?).
 4.  **Query**: Write and execute a SQL query using `db_query_tool`.
     *   Use `ILIKE` for case-insensitive matching.
@@ -53,8 +55,17 @@ Your goal is to find the best video clips matching the user's request and then p
 6.  **Finish**: When you have found relevant clips, STOP calling tools. Just respond with a text summary like "I found X clips."
 
 **Important:**
+- **Do not LIMIT results** unless the user explicitly asks (e.g. "Find me 5 clips"). return all matches.
 - Do not make up clip names.
 - Always verify your query results.
+"""
+
+SUPERVISOR_PROMPT = """You are an Assistant Director. You brainstorm video narratives with the user.
+Your goal is to help the user figure out what kind of edit they want to make.
+You have access to the database to answer questions about available clips (using list_tables_tool, get_schema_tool, db_query_tool, etc.). You can count clips, find categories, and summarize what's available.
+When the user is ready to create an edit and you have agreed on the direction, use the `trigger_video_search_tool`
+passing specific instructions on what clips the Video Editor should find (e.g., 'Find clips with beaches and sunsets').
+Do NOT use the trigger_video_search_tool if the user is just asking questions or brainstorming.
 """
 
 # --- Nodes ---
@@ -72,13 +83,71 @@ def agent_node(state: FilmState):
         logger.info("\n=== USER INPUT ===\n" + str(messages[-1].content))
 
 
-    # Prepend System Prompt if not present (or as a separate message manipulation)
-    input_messages = [SystemMessage(content=SYSTEM_PROMPT)] + messages
-    
-    response = llm_with_tools.invoke(input_messages)
-    
-    return {"messages": [response]}
+    # Prepend System Prompt
+    # Truncate large tool outputs in the context to avoid hitting max tokens
+    # We keep the original messages in 'state', this is just for the LLM view.
+    filtered_messages = []
+    for msg in messages:
+        if isinstance(msg, ToolMessage) and len(str(msg.content)) > 2000:
+            content_str = str(msg.content)
+            new_content = None
+            
+            # Try parsing as JSON list (common for db_query_tool)
+            try:
+                data = json.loads(content_str)
+                if isinstance(data, list) and len(data) > 0:
+                    # Keep first item to show structure/schema
+                    subset = data[:1]
+                    # Add summary item
+                    subset.append({
+                        "summary": f"... {len(data) - 1} more items truncated to save context ...",
+                        "note": "The full list is available to the Planner and Parser."
+                    })
+                    new_content = json.dumps(subset)
+            except Exception:
+                # Not JSON or failed to parse
+                pass
+            
+            if not new_content:
+                 # Fallback to string slicing
+                new_content = content_str[:2000] + "... (truncated)"
 
+            # Create a copy with truncated content
+            # Note: We must preserve the ID and other attributes so the LLM knows which tool call it matches
+            msg_copy = ToolMessage(
+                content=new_content,
+                tool_call_id=msg.tool_call_id,
+                name=msg.name,
+                artifact=msg.artifact,
+                status=msg.status
+            )
+            filtered_messages.append(msg_copy)
+        else:
+            filtered_messages.append(msg)
+
+    input_messages = [SystemMessage(content=SYSTEM_PROMPT)] + filtered_messages
+    
+    response = llm_editor.invoke(input_messages)
+    
+    return {"messages": [response], "active_agent": "editor"}
+
+def supervisor_node(state: FilmState):
+    """
+    Supervisor Agent: Chats with user, brainstorms, and triggers Editor when ready.
+    """
+    messages = state["messages"]
+    
+    # --- Logging Context Separation ---
+    # Only log at the start of a turn (when the last message is from the user)
+    if messages and isinstance(messages[-1], HumanMessage):
+        logger.info("\n" + "="*40 + "\n=== SUPERVISOR PROMPT ===\n" + SUPERVISOR_PROMPT)
+        logger.info("\n=== USER INPUT ===\n" + str(messages[-1].content))
+
+    input_messages = [SystemMessage(content=SUPERVISOR_PROMPT)] + messages
+    
+    response = llm_supervisor.invoke(input_messages)
+    
+    return {"messages": [response], "active_agent": "supervisor"}
 
 def result_parser_node(state: FilmState):
     """
@@ -149,7 +218,7 @@ def planner_node(state: FilmState):
 
 # --- Router ---
 
-def router(state: FilmState) -> Literal["tools", "parser"]:
+def editor_router(state: FilmState) -> Literal["tools", "parser"]:
     messages = state["messages"]
     last_message = messages[-1]
     
@@ -161,18 +230,40 @@ def router(state: FilmState) -> Literal["tools", "parser"]:
     # Move to parsing results -> planner
     return "parser"
 
+def supervisor_router(state: FilmState) -> Literal["supervisor_tools", END]:
+    messages = state["messages"]
+    last_message = messages[-1]
+    
+    if last_message.tool_calls:
+        return "supervisor_tools"
+    return END
+
+def supervisor_tools_router(state: FilmState) -> Literal["agent", "supervisor"]:
+    messages = state["messages"]
+    last_message = messages[-1]
+    
+    if isinstance(last_message, ToolMessage) and last_message.name == "trigger_video_search_tool":
+        logger.info(f"Supervisor triggering Editor via tool call.")
+        return "agent"
+        
+    return "supervisor"
+
 # --- Graph Definition ---
 
 workflow = StateGraph(FilmState)
 
+workflow.add_node("supervisor", supervisor_node)
 workflow.add_node("agent", agent_node)
 workflow.add_node("tools", tool_node)
+workflow.add_node("supervisor_tools", supervisor_tool_node)
 workflow.add_node("parser", result_parser_node)
 workflow.add_node("planner", planner_node)
 
-workflow.add_edge(START, "agent")
+workflow.add_edge(START, "supervisor")
 
-workflow.add_conditional_edges("agent", router)
+workflow.add_conditional_edges("supervisor", supervisor_router)
+workflow.add_conditional_edges("supervisor_tools", supervisor_tools_router)
+workflow.add_conditional_edges("agent", editor_router)
 workflow.add_edge("tools", "agent")
 workflow.add_edge("parser", "planner")
 workflow.add_edge("planner", END)

@@ -32,7 +32,7 @@ class VideoAnalyzer:
 
     def analyze_clip(self, video_path: str) -> Optional[ClipMetadata]:
         from app.utils.logger import setup_logging
-        from app.utils.video_utils import extract_frames_as_base64, build_image_payloads
+        from app.utils.video_utils import extract_frames_as_base64, build_image_payloads, get_video_duration
         from openai import OpenAI
         import json
 
@@ -42,10 +42,17 @@ class VideoAnalyzer:
         try:
             logger.info(f"Analyzing clip: {video_name} using Frame Extraction")
             
+            # Get duration
+            duration = get_video_duration(video_path)
+            
             # extract frames
             base64_frames = extract_frames_as_base64(video_path, num_frames=16)
             image_payloads = build_image_payloads(base64_frames)
             
+            # ... (omitted prompt setup for brevity in search, but needed for replace)
+            # Actually, I should use StartLine/EndLine carefully to avoid rewriting the prompt.
+            # I will just rewrite the surrounding code.
+
             # Construct prompt
             system_prompt = (
                 "You are an editing assistant (intern) reviewing raw footage post-production. "
@@ -98,6 +105,7 @@ class VideoAnalyzer:
             data = json.loads(content)
             # Ensure clip_name is set correctly if model hallucinates it
             data["clip_name"] = video_name
+            data["duration"] = duration
             
             return ClipMetadata(**data)
 

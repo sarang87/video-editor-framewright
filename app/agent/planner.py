@@ -2,6 +2,7 @@ import dspy
 from typing import List
 from pydantic import BaseModel, Field
 from app.utils.logger import setup_logging
+from app.core.config import settings
 
 logger = setup_logging("agent_planner")
 
@@ -34,9 +35,14 @@ class NarrativePlanner(dspy.Module):
         # Convert list of dicts to string for context
         context_str = str(search_results)
         
-        # Limit context if too large (naive truncation)
-        if len(context_str) > 10000:
-             context_str = context_str[:10000] + "... (truncated)"
+        # Limit context based on model length minus safety buffer (for system prompt + output)
+        # 1 token approx 4 chars, so we use char limit. 
+        # MAX_MODEL_LEN is in tokens (e.g. 8192). 8192 * 4 = ~32k chars.
+        # We'll be conservative.
+        max_chars = (settings.MAX_MODEL_LEN * 3) - 2000 
+        
+        if len(context_str) > max_chars:
+             context_str = context_str[:max_chars] + "... (truncated)"
              
         prediction = self.generate_plan(user_intent=user_intent, search_results=context_str)
         

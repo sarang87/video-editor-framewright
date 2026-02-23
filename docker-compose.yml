@@ -7,6 +7,7 @@ services:
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - VLLM_BASE_URL=${VLLM_BASE_URL:-http://vllm:8000/v1}
       - MODEL_NAME=${MODEL_NAME:-Qwen/Qwen3-VL-8B-Instruct-FP8}
+      - MAX_MODEL_LEN=${MAX_MODEL_LEN:-8192}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     depends_on:
       vllm:

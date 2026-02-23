@@ -91,3 +91,13 @@ def validate_clips(clip_names: List[str]):
         "valid": valid_clips,
         "missing": missing_clips
     }
+
+@tool
+def trigger_video_search_tool(search_instructions: str):
+    """
+    Use this tool to trigger the Video Editor Agent when you and the user have agreed
+    to generate an edit plan. Pass specific instructions on what clips to search for.
+    Input: Specific instructions for the specialized search agent (e.g., 'Find clips with beaches and sunsets').
+    """
+    return f"Handoff to Video Editor Agent with instructions: {search_instructions}"
+

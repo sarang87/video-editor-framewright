@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     VLLM_BASE_URL: str = "http://vllm:8000/v1"
     # Matches the default in docker-compose/start_server but can be overridden
     MODEL_NAME: str = "Qwen/Qwen3-VL-8B-Instruct-FP8" 
+    MAX_MODEL_LEN: int = 8192
     
     # Ollama Configuration
     OLLAMA_BASE_URL: str = "http://localhost:11434"

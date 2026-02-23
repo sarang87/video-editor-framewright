@@ -13,4 +13,4 @@ class FilmState(TypedDict):
     next: str # control flow field
     sql_query: str # The last generated SQL query
     sql_error: str # Any error from execution
-
+    active_agent: str # tracks which agent is currently active

@@ -29,11 +29,17 @@ class DuckDBManager:
             conn.execute("ALTER TABLE clips ADD COLUMN transition_point VARCHAR")
             logger.info("Migrated schema: Added transition_point column")
         except duckdb.CatalogException:
-            # Column likely already exists
             pass
         except Exception as e:
-            # Other errors
-            logger.debug(f"Schema migration note: {e}")
+            logger.debug(f"Schema migration note (transition_point): {e}")
+
+        try:
+            conn.execute("ALTER TABLE clips ADD COLUMN duration FLOAT")
+            logger.info("Migrated schema: Added duration column")
+        except duckdb.CatalogException:
+            pass
+        except Exception as e:
+            logger.debug(f"Schema migration note (duration): {e}")
 
     def init_db(self):
         conn = self._get_connection()
@@ -46,6 +52,7 @@ class DuckDBManager:
                 motion_detected VARCHAR,
                 narrative_utility TEXT,
                 transition_point VARCHAR,
+                duration FLOAT,
                 analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -54,8 +61,8 @@ class DuckDBManager:
     def insert_clip(self, metadata: ClipMetadata):
         conn = self._get_connection()
         conn.execute("""
-            INSERT INTO clips (clip_name, category, visual_description, shot_type, motion_detected, narrative_utility, transition_point)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO clips (clip_name, category, visual_description, shot_type, motion_detected, narrative_utility, transition_point, duration)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             metadata.clip_name,
             metadata.category,
@@ -63,7 +70,8 @@ class DuckDBManager:
             metadata.shot_type,
             metadata.motion_detected,
             metadata.narrative_utility,
-            metadata.transition_point
+            metadata.transition_point,
+            metadata.duration
         ))
         logger.info(f"Inserted metadata for clip: {metadata.clip_name}")
 

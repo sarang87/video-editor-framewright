@@ -6,10 +6,15 @@ sys.path.append(os.getcwd())
 # Set env var BEFORE importing app modules so they pick it up
 os.environ["DUCKDB_PATH"] = "test_clips.duckdb"
 
+import dspy
 from app.services.database import DuckDBManager
 from app.agent.graph import app
 from langchain_core.messages import HumanMessage
 from app.models import ClipMetadata
+
+# Configure DSPy
+lm = dspy.LM(model="openai/Qwen/Qwen3-VL-8B-Instruct-FP8", api_base="http://vllm:8000/v1", api_key="token-is-ignored")
+dspy.configure(lm=lm)
 
 # 1. Setup Mock Data
 print("--- Setting up Database ---")
@@ -20,36 +25,54 @@ db = DuckDBManager("test_clips.duckdb")
 db._get_connection().execute("DROP TABLE IF EXISTS clips")
 db.init_db()
 
-# Insert samples
-samples = []
+# Create mock clips
+clips = []
 for i in range(1, 16):
-    samples.append(
-        ClipMetadata(
-            clip_name=f"clip{i}.mp4", 
-            category="B-Roll", 
-            visual_description=f"Drone shot of mountains and nature {i}", 
-            shot_type="Wide", 
-            motion_detected="High", 
-            narrative_utility="Establishing", 
-            transition_point="Start"
-        )
-    )
+    clips.append(ClipMetadata(
+        clip_name=f"clip{i}.mp4",
+        category="B-Roll",
+        visual_description=f"Drone shot of mountains and nature {i}",
+        shot_type="Wide",
+        motion_detected="High",
+        narrative_utility="Establishing",
+        transition_point="Start",
+        duration=5.0 + i
+    ))
 
-for s in samples:
-    db.insert_clip(s)
+# Add a massive clip to test context truncation
+clips.append(ClipMetadata(
+    clip_name="massive_clip.mp4",
+    category="B-Roll",
+    visual_description="Drone shot of mountains " * 500, # 24 chars * 500 = 12,000 chars
+    shot_type="Wide",
+    motion_detected="High",
+    narrative_utility="Stress Test",
+    transition_point="Start",
+    duration=100.0
+))
 
-print(f"Inserted {len(samples)} sample clips.")
+# Insert into DB
+# Ensure table has duration (init_db called in __init__ handles this via migrate)
+print("Inserting mock clips...")
+
+for clip in clips:
+    # Check if exists to avoid dupe in rerun
+    if not db.clip_exists(clip.clip_name):
+        db.insert_clip(clip)
+
+print(f"Inserted {len(clips)} sample clips.")
 
 # 2. Run Agent
 print("\n--- Running Agent ---")
-query = "Find me a drone shot of mountains."
+# We want to test if it selects duration and doesn't limit results
+user_input = "Find me a drone shot of mountains and include the duration in the results."
 
 inputs = {
-    "messages": [HumanMessage(content=query)],
-    "user_intent": query
+    "messages": [HumanMessage(content=user_input)],
+    "user_intent": user_input
 }
 
-print(f"User Query: {query}")
+print(f"User Query: {user_input}")
 
 # Overwrite the db_manager in tools.py effectively? 
 # The tools.py creates its own DuckDBManager instance.

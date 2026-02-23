@@ -76,3 +76,19 @@ def build_image_payloads(base64_frames: List[str]) -> List[Dict[str, Any]]:
             "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
         })
     return payloads
+
+def get_video_duration(video_path: Union[str, Path]) -> float:
+    """
+    Get the duration of a video in seconds.
+    """
+    if not DECORD_AVAILABLE:
+        return 0.0
+        
+    try:
+        vr = VideoReader(str(video_path), ctx=cpu(0))
+        fps = vr.get_avg_fps()
+        if fps > 0:
+            return float(len(vr)) / fps
+        return 0.0
+    except Exception:
+        return 0.0
